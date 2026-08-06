@@ -1,11 +1,10 @@
-# ===== RUST LFG BOT v7.0 =====
-# Full-featured bot with admin panel, moderation, clans, favorites, swipe system, chat, and more
+# ===== RUST LFG BOT v8.3 =====
+# Исправлены все критические ошибки
 
 import os
 import asyncio
 import sqlite3
-import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -16,17 +15,19 @@ TOKEN = "8804113008:AAGgdo_FZMDoWr2C0SBChjo4-HMRiEog-D4"
 
 # ===== ADMIN =====
 OWNER_ID = 6276697402
-ADMIN_IDS = [OWNER_ID]  # Можно добавить других админов
+ADMIN_IDS = [OWNER_ID]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# ===== ANTI-SPAM =====
+last_message_time = {}
 
 # ===== DATABASE =====
 def init_db():
     conn = sqlite3.connect('rust_clan.db')
     cur = conn.cursor()
 
-    # Users / Profiles
     cur.execute('''
         CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,7 +47,6 @@ def init_db():
         )
     ''')
 
-    # Favorites
     cur.execute('''
         CREATE TABLE IF NOT EXISTS favorites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +56,6 @@ def init_db():
         )
     ''')
 
-    # Clans
     cur.execute('''
         CREATE TABLE IF NOT EXISTS clans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +71,6 @@ def init_db():
         )
     ''')
 
-    # Clan members
     cur.execute('''
         CREATE TABLE IF NOT EXISTS clan_members (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +81,6 @@ def init_db():
         )
     ''')
 
-    # Chat messages
     cur.execute('''
         CREATE TABLE IF NOT EXISTS chat_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +91,6 @@ def init_db():
         )
     ''')
 
-    # Bans
     cur.execute('''
         CREATE TABLE IF NOT EXISTS bans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,7 +101,6 @@ def init_db():
         )
     ''')
 
-    # Reports
     cur.execute('''
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,7 +112,6 @@ def init_db():
         )
     ''')
 
-    # Notifications
     cur.execute('''
         CREATE TABLE IF NOT EXISTS notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,7 +120,6 @@ def init_db():
         )
     ''')
 
-    # Swipes
     cur.execute('''
         CREATE TABLE IF NOT EXISTS swipes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -137,7 +130,6 @@ def init_db():
         )
     ''')
 
-    # Moderators
     cur.execute('''
         CREATE TABLE IF NOT EXISTS moderators (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,10 +183,16 @@ TEXTS = {
         'mic_question': "🎤 Есть ли у вас микрофон?",
         'tz_question': "🕐 Выберите часовой пояс:",
         'group_question': "👥 Сколько человек вы ищете в команду?",
-        'description_question': "📝 Расскажите о себе:",
+        'description_question': "📝 Расскажите о себе (макс. 500 символов):",
         'steam_question': "🆔 Ваш Steam ID:",
         'avatar_question': "📸 Отправьте фото (или '-' пропустить):",
-        'profile_already_exists': "У вас уже есть анкета. Обновите её или удалите."
+        'profile_already_exists': "У вас уже есть анкета. Обновите её или удалите.",
+        'confirm_delete': "⚠️ Вы уверены, что хотите удалить анкету?",
+        'cancel': "✅ Действие отменено.",
+        'spam_warning': "⏳ Не спамьте! Подождите 5 секунд.",
+        'desc_too_long': "❌ Описание слишком длинное! Максимум 500 символов.",
+        'steam_invalid': "❌ Steam ID должен содержать только цифры.",
+        'already_in_clan': "❌ Вы уже состоите в клане."
     },
     'en': {
         'start': "🦀 Welcome to RustLFG Bot!\n\nHere you can:\n✅ Create a profile\n✅ Find a team\n✅ Create a clan\n✅ Chat with others\n\nChoose an action:",
@@ -233,21 +231,30 @@ TEXTS = {
         'mic_question': "🎤 Do you have a microphone?",
         'tz_question': "🕐 Select your timezone:",
         'group_question': "👥 How many people are you looking for?",
-        'description_question': "📝 Tell us about yourself:",
+        'description_question': "📝 Tell us about yourself (max 500 chars):",
         'steam_question': "🆔 Your Steam ID:",
         'avatar_question': "📸 Send a photo (or '-' to skip):",
-        'profile_already_exists': "You already have a profile. Update it or delete it."
+        'profile_already_exists': "You already have a profile. Update it or delete it.",
+        'confirm_delete': "⚠️ Are you sure you want to delete your profile?",
+        'cancel': "✅ Action cancelled.",
+        'spam_warning': "⏳ Don't spam! Wait 5 seconds.",
+        'desc_too_long': "❌ Description too long! Maximum 500 characters.",
+        'steam_invalid': "❌ Steam ID must contain only numbers.",
+        'already_in_clan': "❌ You are already in a clan."
     }
 }
 
 # ===== HELPERS =====
 def get_lang(user_id):
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT language FROM profiles WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    conn.close()
-    return result[0] if result else 'ru'
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT language FROM profiles WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else 'ru'
+    except:
+        return 'ru'
 
 def get_text(user_id, key, **kwargs):
     lang = get_lang(user_id)
@@ -257,12 +264,15 @@ def get_text(user_id, key, **kwargs):
     return text
 
 def is_banned(user_id):
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT reason FROM bans WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    conn.close()
-    return result[0] if result else None
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT reason FROM bans WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result[0] if result else None
+    except:
+        return None
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
@@ -270,13 +280,27 @@ def is_admin(user_id):
 def is_moderator(user_id):
     if is_admin(user_id):
         return True
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT id FROM moderators WHERE user_id = ?', (user_id,))
-    result = cur.fetchone()
-    conn.close()
-    return result is not None
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM moderators WHERE user_id = ?', (user_id,))
+        result = cur.fetchone()
+        conn.close()
+        return result is not None
+    except:
+        return False
 
+# ===== BAN CHECK DECORATOR =====
+def check_ban(func):
+    async def wrapper(msg: types.Message, *args, **kwargs):
+        ban_reason = is_banned(msg.from_user.id)
+        if ban_reason:
+            await msg.answer(f"🚫 Вы забанены. Причина: {ban_reason}")
+            return
+        return await func(msg, *args, **kwargs)
+    return wrapper
+
+# ===== MENU =====
 def main_menu(lang='ru'):
     t = TEXTS.get(lang, TEXTS['ru'])
     kb = types.ReplyKeyboardMarkup(
@@ -351,19 +375,17 @@ def admin_panel():
     ])
     return kb
 
-# ===== MIDDLEWARE - BAN CHECK =====
-@dp.message()
-async def check_bans(msg: types.Message):
-    if msg.text and msg.text.startswith('/'):
-        return
-    ban_reason = is_banned(msg.from_user.id)
-    if ban_reason:
-        await msg.answer(f"🚫 Вы забанены. Причина: {ban_reason}")
-        return
-    await dp.message_handlers.handle(msg)
+# ============================================
+# ========== USER DATA ==========
+# ============================================
+
+user_data = {}
+clan_data = {}
+report_data = {}
+admin_state = {}
 
 # ============================================
-# ========== USER COMMANDS ==========
+# ========== COMMANDS ==========
 # ============================================
 
 @dp.message(Command("start"))
@@ -371,39 +393,62 @@ async def start(msg: types.Message):
     user_id = msg.from_user.id
     lang = msg.from_user.language_code if msg.from_user.language_code in ['ru', 'en'] else 'ru'
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT OR REPLACE INTO profiles (user_id, username, language)
-        VALUES (?, ?, ?)
-    ''', (user_id, msg.from_user.username or "Не указан", lang))
-    cur.execute('INSERT OR IGNORE INTO notifications (user_id, enabled) VALUES (?, 1)', (user_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT OR REPLACE INTO profiles (user_id, username, language)
+            VALUES (?, ?, ?)
+        ''', (user_id, msg.from_user.username or "Не указан", lang))
+        cur.execute('INSERT OR IGNORE INTO notifications (user_id, enabled) VALUES (?, 1)', (user_id,))
+        conn.commit()
+        conn.close()
+    except:
+        pass
     
     t = TEXTS.get(lang, TEXTS['ru'])
     await msg.answer(t['start'], reply_markup=main_menu(lang))
 
-# ===== CREATE PROFILE =====
-user_data = {}
+@dp.message(Command("cancel"))
+async def cancel_action(msg: types.Message):
+    user_id = msg.from_user.id
+    lang = get_lang(user_id)
+    t = TEXTS.get(lang, TEXTS['ru'])
+    
+    if user_id in user_data:
+        del user_data[user_id]
+    if user_id in clan_data:
+        del clan_data[user_id]
+    if user_id in report_data:
+        del report_data[user_id]
+    if user_id in admin_state:
+        del admin_state[user_id]
+    
+    await msg.answer(t['cancel'], reply_markup=main_menu(lang))
 
-@dp.message(lambda msg: msg.text in ["📝 Создать анкету", "📝 Create profile"])
+# ============================================
+# ========== PROFILE CREATION ==========
+# ============================================
+
+@dp.message(F.text.in_(["📝 Создать анкету", "📝 Create profile"]))
+@check_ban
 async def create_profile_start(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT id FROM profiles WHERE user_id = ? AND active = 1', (user_id,))
-    if cur.fetchone():
-        await msg.answer(t['profile_already_exists'])
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM profiles WHERE user_id = ? AND active = 1', (user_id,))
+        exists = cur.fetchone()
         conn.close()
+    except:
+        exists = None
+    
+    if exists:
+        await msg.answer(t['profile_already_exists'])
         return
-    conn.close()
     
     user_data[user_id] = {'step': 'age'}
     await msg.answer(t['age_question'], reply_markup=age_buttons(lang))
@@ -490,6 +535,10 @@ async def profile_description(msg: types.Message):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
+    if len(msg.text) > 500:
+        await msg.answer(t['desc_too_long'])
+        return
+    
     user_data[user_id]['description'] = msg.text
     user_data[user_id]['step'] = 'steam'
     await msg.answer(t['steam_question'])
@@ -500,7 +549,12 @@ async def profile_steam(msg: types.Message):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    user_data[user_id]['steam'] = msg.text
+    steam = msg.text.strip()
+    if steam != '-' and not steam.isdigit():
+        await msg.answer(t['steam_invalid'])
+        return
+    
+    user_data[user_id]['steam'] = steam
     user_data[user_id]['step'] = 'avatar'
     await msg.answer(t['avatar_question'])
 
@@ -509,7 +563,7 @@ async def profile_avatar(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
-    data = user_data[user_id]
+    data = user_data.get(user_id, {})
     
     if msg.text and msg.text == '-':
         data['avatar_path'] = None
@@ -517,12 +571,16 @@ async def profile_avatar(msg: types.Message):
         return
     
     if msg.photo:
-        file = await bot.get_file(msg.photo[-1].file_id)
-        file_path = f"avatars/{user_id}.jpg"
-        os.makedirs("avatars", exist_ok=True)
-        await bot.download_file(file.file_path, file_path)
-        data['avatar_path'] = file_path
-        await save_profile(msg)
+        try:
+            file = await bot.get_file(msg.photo[-1].file_id)
+            file_path = f"avatars/{user_id}.jpg"
+            os.makedirs("avatars", exist_ok=True)
+            await bot.download_file(file.file_path, file_path)
+            data['avatar_path'] = file_path
+            await save_profile(msg)
+        except Exception as e:
+            await msg.answer(f"❌ Ошибка при загрузке фото: {e}")
+            return
     else:
         await msg.answer("Отправьте фото или '-' чтобы пропустить / Send photo or '-' to skip")
 
@@ -530,30 +588,41 @@ async def save_profile(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
-    data = user_data.get(user_id, {})
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT OR REPLACE INTO profiles 
-        (user_id, username, looking_for, description, age, steam_id, microphone, timezone, max_players, avatar_path, date, language)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        user_id,
-        msg.from_user.username or "Не указан",
-        data.get('looking', 'Не указано'),
-        data.get('description', 'Не указано'),
-        data.get('age', 'Не указан'),
-        data.get('steam', 'Не указан'),
-        data.get('mic', 'Нет'),
-        data.get('tz', 'UTC+3'),
-        data.get('max_players', 1),
-        data.get('avatar_path'),
-        datetime.now(),
-        lang
-    ))
-    conn.commit()
-    conn.close()
+    if user_id not in user_data:
+        await msg.answer("❌ Ошибка: данные анкеты не найдены. Попробуйте заново.")
+        return
+    
+    data = user_data[user_id]
+    
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT OR REPLACE INTO profiles 
+            (user_id, username, looking_for, description, age, steam_id, microphone, timezone, max_players, avatar_path, date, language)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            user_id,
+            msg.from_user.username or "Не указан",
+            data.get('looking', 'Не указано'),
+            data.get('description', 'Не указано'),
+            data.get('age', 'Не указан'),
+            data.get('steam', 'Не указан'),
+            data.get('mic', 'Нет'),
+            data.get('tz', 'UTC+3'),
+            data.get('max_players', 1),
+            data.get('avatar_path'),
+            datetime.now(),
+            lang
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка при сохранении: {e}")
+        if user_id in user_data:
+            del user_data[user_id]
+        return
     
     avatar_text = "✅ Есть" if data.get('avatar_path') else "❌ Нет"
     
@@ -572,59 +641,156 @@ async def save_profile(msg: types.Message):
     )
     
     if data.get('avatar_path'):
-        photo = FSInputFile(data['avatar_path'])
-        await msg.answer_photo(photo, caption="📸 Ваша аватарка / Your avatar")
+        try:
+            photo = FSInputFile(data['avatar_path'])
+            await msg.answer_photo(photo, caption="📸 Ваша аватарка / Your avatar")
+        except:
+            pass
     
     if user_id in user_data:
         del user_data[user_id]
     
-    # Уведомления другим пользователям
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT user_id FROM notifications WHERE enabled = 1')
-    users = cur.fetchall()
-    conn.close()
+    # Уведомления
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT user_id FROM notifications WHERE enabled = 1')
+        users = cur.fetchall()
+        conn.close()
+        
+        for u in users:
+            if u[0] != user_id:
+                try:
+                    await bot.send_message(u[0], f"🦀 Новый игрок в поиске! / New player in search!\n👤 @{msg.from_user.username or 'Игрок'}")
+                    await asyncio.sleep(0.05)
+                except:
+                    pass
+    except:
+        pass
+
+# ============================================
+# ========== PROFILE MANAGEMENT ==========
+# ============================================
+
+@dp.message(F.text.in_(["👤 Моя анкета", "👤 My profile"]))
+@check_ban
+async def my_profile(msg: types.Message):
+    user_id = msg.from_user.id
+    lang = get_lang(user_id)
+    t = TEXTS.get(lang, TEXTS['ru'])
     
-    for u in users:
-        if u[0] != user_id:
-            try:
-                await bot.send_message(u[0], f"🦀 Новый игрок в поиске! / New player in search!\n👤 @{msg.from_user.username or 'Игрок'}")
-            except:
-                pass
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT looking_for, description, age, microphone, timezone, max_players, steam_id, avatar_path 
+            FROM profiles WHERE user_id = ? AND active = 1
+        ''', (user_id,))
+        r = cur.fetchone()
+        conn.close()
+    except:
+        r = None
+    
+    if not r:
+        await msg.answer("❌ У вас нет анкеты. Создайте её!")
+        return
+    
+    text = (
+        f"👤 **Ваша анкета:**\n\n"
+        f"👥 Ищет: {r[0]}\n"
+        f"🎂 Возраст: {r[2]}\n"
+        f"🎤 Микрофон: {r[3]}\n"
+        f"🕐 Часовой пояс: {r[4]}\n"
+        f"👥 Группа: {r[5]} чел.\n"
+        f"🆔 Steam: {r[6]}\n"
+        f"📝 {r[1]}\n"
+    )
+    
+    if r[7] and os.path.exists(r[7]):
+        try:
+            photo = FSInputFile(r[7])
+            await msg.answer_photo(photo, caption=text)
+        except:
+            await msg.answer(text)
+    else:
+        await msg.answer(text)
+
+@dp.message(F.text.in_(["🗑 Удалить анкету", "🗑 Delete profile"]))
+@check_ban
+async def delete_profile_confirm(msg: types.Message):
+    user_id = msg.from_user.id
+    lang = get_lang(user_id)
+    t = TEXTS.get(lang, TEXTS['ru'])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да / Yes", callback_data="delete_confirm_yes")],
+        [InlineKeyboardButton(text="❌ Нет / No", callback_data="delete_confirm_no")]
+    ])
+    
+    await msg.answer(t['confirm_delete'], reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data.startswith('delete_confirm_'))
+async def delete_profile_callback(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    lang = get_lang(user_id)
+    t = TEXTS.get(lang, TEXTS['ru'])
+    
+    ban_reason = is_banned(user_id)
+    if ban_reason:
+        await call.answer("Вы забанены / You are banned")
+        return
+    
+    if call.data == 'delete_confirm_yes':
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (user_id,))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+        await call.message.edit_text(t['deleted'])
+        await call.message.answer(t['deleted'], reply_markup=main_menu(lang))
+    else:
+        await call.message.edit_text("❌ Удаление отменено / Deletion cancelled")
+    
+    await call.answer()
 
 # ============================================
 # ========== SEARCH ==========
 # ============================================
 
-@dp.message(lambda msg: msg.text in ["🔍 Искать игроков", "🔍 Find players"])
+@dp.message(F.text.in_(["🔍 Искать игроков", "🔍 Find players"]))
+@check_ban
 async def search(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
-    count = cur.fetchone()[0]
-    
-    if count == 0:
-        await msg.answer(t['no_profiles'])
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
+        count = cur.fetchone()[0]
+        
+        if count == 0:
+            await msg.answer(t['no_profiles'])
+            conn.close()
+            return
+        
+        cur.execute('''
+            SELECT user_id, username, looking_for, description, age, microphone, timezone, max_players, steam_id, avatar_path 
+            FROM profiles WHERE active = 1 ORDER BY id DESC LIMIT 20
+        ''')
+        results = cur.fetchall()
         conn.close()
+    except:
+        await msg.answer("❌ Ошибка при загрузке анкет")
         return
-    
-    cur.execute('''
-        SELECT user_id, username, looking_for, description, age, microphone, timezone, max_players, steam_id, avatar_path 
-        FROM profiles WHERE active = 1 ORDER BY id DESC LIMIT 20
-    ''')
-    results = cur.fetchall()
-    conn.close()
     
     sent_count = 0
     for r in results:
-        user_id, username, looking_for, description, age, mic, tz, max_players, steam, avatar = r
+        uid, username, looking_for, description, age, mic, tz, max_players, steam, avatar = r
         
         text = (
             f"👤 @{username or 'Не указан / Unknown'}\n"
@@ -638,9 +804,9 @@ async def search(msg: types.Message):
             f"➖➖➖➖➖"
         )
         
-        fav_btn = InlineKeyboardButton(text="⭐ Избранное / Favorites", callback_data=f"fav_add_{user_id}")
-        report_btn = InlineKeyboardButton(text="⚠️ Жалоба / Report", callback_data=f"report_{user_id}")
-        write_btn = InlineKeyboardButton(text="💬 Написать / Write", url=f"tg://user?id={user_id}")
+        fav_btn = InlineKeyboardButton(text="⭐ Избранное / Favorites", callback_data=f"fav_add_{uid}")
+        report_btn = InlineKeyboardButton(text="⚠️ Жалоба / Report", callback_data=f"report_{uid}")
+        write_btn = InlineKeyboardButton(text="💬 Написать / Write", url=f"tg://user?id={uid}")
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [write_btn],
@@ -648,8 +814,11 @@ async def search(msg: types.Message):
         ])
         
         if avatar and os.path.exists(avatar):
-            photo = FSInputFile(avatar)
-            await msg.answer_photo(photo, caption=text, reply_markup=kb)
+            try:
+                photo = FSInputFile(avatar)
+                await msg.answer_photo(photo, caption=text, reply_markup=kb)
+            except:
+                await msg.answer(text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
         
@@ -669,45 +838,54 @@ async def add_favorite(call: types.CallbackQuery):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
+    ban_reason = is_banned(user_id)
+    if ban_reason:
         await call.answer("Вы забанены / You are banned")
         return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT id FROM favorites WHERE user_id = ? AND favorite_id = ?', (user_id, target_id))
-    if cur.fetchone():
-        cur.execute('DELETE FROM favorites WHERE user_id = ? AND favorite_id = ?', (user_id, target_id))
-        conn.commit()
-        conn.close()
-        await call.answer(t['favorite_removed'])
-        await call.message.edit_reply_markup(reply_markup=None)
-    else:
-        cur.execute('INSERT INTO favorites (user_id, favorite_id, date) VALUES (?, ?, ?)',
-                   (user_id, target_id, datetime.now()))
-        conn.commit()
-        conn.close()
-        await call.answer(t['favorite_added'])
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM favorites WHERE user_id = ? AND favorite_id = ?', (user_id, target_id))
+        exists = cur.fetchone()
+        
+        if exists:
+            cur.execute('DELETE FROM favorites WHERE user_id = ? AND favorite_id = ?', (user_id, target_id))
+            conn.commit()
+            conn.close()
+            await call.answer(t['favorite_removed'])
+            await call.message.edit_reply_markup(reply_markup=None)
+        else:
+            cur.execute('INSERT INTO favorites (user_id, favorite_id, date) VALUES (?, ?, ?)',
+                       (user_id, target_id, datetime.now()))
+            conn.commit()
+            conn.close()
+            await call.answer(t['favorite_added'])
+    except:
+        await call.answer("❌ Ошибка")
+    
+    await call.answer()
 
-@dp.message(lambda msg: msg.text in ["⭐ Избранное / Favorites", "⭐ Избранное"])
+@dp.message(F.text.in_(["⭐ Избранное / Favorites", "⭐ Избранное"]))
+@check_ban
 async def show_favorites(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT p.user_id, p.username, p.looking_for, p.age, p.microphone
-        FROM favorites f
-        JOIN profiles p ON f.favorite_id = p.user_id
-        WHERE f.user_id = ? AND p.active = 1
-    ''', (user_id,))
-    results = cur.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT p.user_id, p.username, p.looking_for, p.age, p.microphone
+            FROM favorites f
+            JOIN profiles p ON f.favorite_id = p.user_id
+            WHERE f.user_id = ? AND p.active = 1
+        ''', (user_id,))
+        results = cur.fetchall()
+        conn.close()
+    except:
+        results = []
     
     if not results:
         await msg.answer("⭐ У вас нет избранных / No favorites")
@@ -727,28 +905,58 @@ async def show_favorites(msg: types.Message):
 # ========== SWIPE SYSTEM ==========
 # ============================================
 
-@dp.message(lambda msg: msg.text in ["💕 Свайп / Swipe", "💕 Свайп"])
+@dp.message(F.text.in_(["💕 Свайп / Swipe", "💕 Свайп"]))
+@check_ban
 async def swipe_start(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        
+        cur.execute('''
+            SELECT user_id, username, looking_for, age, description, microphone, avatar_path 
+            FROM profiles 
+            WHERE active = 1 
+            AND user_id != ? 
+            AND user_id NOT IN (SELECT target_id FROM swipes WHERE user_id = ?)
+            ORDER BY RANDOM() LIMIT 1
+        ''', (user_id, user_id))
+        result = cur.fetchone()
+        conn.close()
+    except:
+        await msg.answer("❌ Ошибка при загрузке анкет")
         return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT user_id, username, looking_for, age, description, microphone, avatar_path 
-        FROM profiles 
-        WHERE active = 1 AND user_id != ? 
-        ORDER BY RANDOM() LIMIT 1
-    ''', (user_id,))
-    result = cur.fetchone()
-    conn.close()
-    
     if not result:
-        await msg.answer("😕 Нет доступных анкет / No profiles available")
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('DELETE FROM swipes WHERE user_id = ?', (user_id,))
+            conn.commit()
+            conn.close()
+        except:
+            pass
+        
+        # Проверяем, есть ли вообще пользователи
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1 AND user_id != ?', (user_id,))
+            count = cur.fetchone()[0]
+            conn.close()
+            
+            if count == 0:
+                await msg.answer("😕 Нет доступных анкет / No profiles available")
+                return
+        except:
+            pass
+        
+        await msg.answer("💕 Вы просмотрели всех! Начнём заново.")
+        # Запускаем снова с обновлённой базой
+        await swipe_start(msg)
         return
     
     target_id, username, looking_for, age, desc, mic, avatar = result
@@ -771,8 +979,11 @@ async def swipe_start(msg: types.Message):
     ])
     
     if avatar and os.path.exists(avatar):
-        photo = FSInputFile(avatar)
-        await msg.answer_photo(photo, caption=text, reply_markup=kb)
+        try:
+            photo = FSInputFile(avatar)
+            await msg.answer_photo(photo, caption=text, reply_markup=kb)
+        except:
+            await msg.answer(text, reply_markup=kb)
     else:
         await msg.answer(text, reply_markup=kb)
 
@@ -783,92 +994,116 @@ async def handle_swipe(call: types.CallbackQuery):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
+    ban_reason = is_banned(user_id)
+    if ban_reason:
         await call.answer("Вы забанены / You are banned")
         return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('INSERT INTO swipes (user_id, target_id, action, date) VALUES (?, ?, ?, ?)',
-               (user_id, target_id, action, datetime.now()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('INSERT INTO swipes (user_id, target_id, action, date) VALUES (?, ?, ?, ?)',
+                   (user_id, target_id, action, datetime.now()))
+        conn.commit()
+        conn.close()
+    except:
+        pass
     
     if action == 'like':
         await call.answer(t['swipe_like'])
-        # Проверка взаимного лайка
-        conn = sqlite3.connect('rust_clan.db')
-        cur = conn.cursor()
-        cur.execute('SELECT id FROM swipes WHERE user_id = ? AND target_id = ? AND action = "like"',
-                   (target_id, user_id))
-        mutual = cur.fetchone()
-        conn.close()
         
-        if mutual:
-            # Получаем username
+        # Проверка взаимного лайка
+        try:
             conn = sqlite3.connect('rust_clan.db')
             cur = conn.cursor()
-            cur.execute('SELECT username FROM profiles WHERE user_id = ?', (target_id,))
-            result = cur.fetchone()
+            cur.execute('SELECT id FROM swipes WHERE user_id = ? AND target_id = ? AND action = "like"',
+                       (target_id, user_id))
+            mutual = cur.fetchone()
             conn.close()
-            username = result[0] if result else "Unknown"
             
-            await call.message.answer(t['swipe_match'].format(username=username))
+            if mutual:
+                try:
+                    conn = sqlite3.connect('rust_clan.db')
+                    cur = conn.cursor()
+                    cur.execute('SELECT username FROM profiles WHERE user_id = ?', (target_id,))
+                    result = cur.fetchone()
+                    conn.close()
+                    username = result[0] if result else "Unknown"
+                    await call.message.answer(t['swipe_match'].format(username=username))
+                except:
+                    pass
+        except:
+            pass
     else:
         await call.answer(t['swipe_dislike'])
     
     await call.message.delete()
-    # Показать следующую анкету
     await swipe_start(call.message)
 
 # ============================================
 # ========== CHAT ==========
 # ============================================
 
-@dp.message(lambda msg: msg.text in ["💬 Чат / Chat", "💬 Чат"])
+@dp.message(F.text.in_(["💬 Чат / Chat", "💬 Чат"]))
+@check_ban
 async def chat_start(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
     await msg.answer(
         f"{t['chat_welcome']}\n\n"
         "📌 Отправляй сообщения сюда, и их увидят все.\n"
-        "📌 Для ответа конкретному человеку напиши @username",
+        "📌 Для ответа конкретному человеку напиши @username\n"
+        "📌 Для выхода нажми '🔙 Назад / Back'",
         reply_markup=types.ReplyKeyboardMarkup(
             keyboard=[[types.KeyboardButton(text="🔙 Назад / Back")]],
             resize_keyboard=True
         )
     )
 
-@dp.message(lambda msg: msg.text and not msg.text.startswith('/') and msg.text not in ["🔙 Назад / Back", "🔙 Назад"])
+@dp.message(lambda msg: msg.text and not msg.text.startswith('/') and msg.text not in ["🔙 Назад / Back", "🔙 Назад", "💬 Чат / Chat", "💬 Чат"])
 async def chat_message(msg: types.Message):
     user_id = msg.from_user.id
-    lang = get_lang(user_id)
     
-    if is_banned(user_id):
+    ban_reason = is_banned(user_id)
+    if ban_reason:
+        await msg.answer(f"🚫 Вы забанены. Причина: {ban_reason}")
         return
     
-    if msg.text in ["💬 Чат / Chat", "💬 Чат"]:
+    # Anti-spam
+    if user_id in last_message_time:
+        if (datetime.now() - last_message_time[user_id]).seconds < 5:
+            await msg.answer("⏳ Не спамьте! Подождите 5 секунд.")
+            return
+    
+    # Ограничение длины сообщения
+    if len(msg.text) > 1000:
+        await msg.answer("❌ Сообщение слишком длинное (макс. 1000 символов)")
         return
     
-    # Сохраняем сообщение в БД
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('INSERT INTO chat_messages (user_id, username, message, date) VALUES (?, ?, ?, ?)',
-               (user_id, msg.from_user.username or "Не указан", msg.text, datetime.now()))
-    conn.commit()
-    conn.close()
+    last_message_time[user_id] = datetime.now()
     
-    # Отправляем сообщение всем активным пользователям
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT user_id FROM profiles WHERE active = 1')
-    users = cur.fetchall()
-    conn.close()
+    # Save message
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('INSERT INTO chat_messages (user_id, username, message, date) VALUES (?, ?, ?, ?)',
+                   (user_id, msg.from_user.username or "Не указан", msg.text, datetime.now()))
+        conn.commit()
+        conn.close()
+    except:
+        pass
+    
+    # Broadcast
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT user_id FROM profiles WHERE active = 1')
+        users = cur.fetchall()
+        conn.close()
+    except:
+        return
     
     sent_count = 0
     for u in users:
@@ -881,9 +1116,6 @@ async def chat_message(msg: types.Message):
                 await asyncio.sleep(0.05)
             except:
                 pass
-    
-    if sent_count == 0:
-        await msg.answer("💬 Сообщение сохранено, но пока никто не в сети.")
 
 @dp.message(lambda msg: msg.text == "🔙 Назад / Back")
 async def chat_back(msg: types.Message):
@@ -896,26 +1128,25 @@ async def chat_back(msg: types.Message):
 # ========== CLANS ==========
 # ============================================
 
-clan_data = {}
-
-@dp.message(lambda msg: msg.text in ["🏰 Создать клан", "🏰 Create clan"])
+@dp.message(F.text.in_(["🏰 Создать клан", "🏰 Create clan"]))
+@check_ban
 async def create_clan_start(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
-    # Проверяем, не состоит ли уже в клане
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT id FROM clan_members WHERE user_id = ?', (user_id,))
-    if cur.fetchone():
-        await msg.answer("❌ Вы уже состоите в клане. Выйдите из него, чтобы создать новый.")
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT id FROM clan_members WHERE user_id = ?', (user_id,))
+        exists = cur.fetchone()
         conn.close()
+    except:
+        exists = None
+    
+    if exists:
+        await msg.answer(t['already_in_clan'])
         return
-    conn.close()
     
     clan_data[user_id] = {'step': 'name'}
     await msg.answer(t['clan_name'])
@@ -962,22 +1193,26 @@ async def clan_server(msg: types.Message):
     
     clan_data[user_id]['server'] = msg.text
     
-    # Сохраняем клан
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT INTO clans (creator_id, name, tag, description, server, date)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, clan_data[user_id]['name'], clan_data[user_id]['tag'],
-          clan_data[user_id]['desc'], clan_data[user_id]['server'], datetime.now()))
-    
-    clan_id = cur.lastrowid
-    
-    # Добавляем создателя в клан
-    cur.execute('INSERT INTO clan_members (clan_id, user_id, role, joined_date) VALUES (?, ?, ?, ?)',
-               (clan_id, user_id, 'leader', datetime.now()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO clans (creator_id, name, tag, description, server, date)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, clan_data[user_id]['name'], clan_data[user_id]['tag'],
+              clan_data[user_id]['desc'], clan_data[user_id]['server'], datetime.now()))
+        
+        clan_id = cur.lastrowid
+        
+        cur.execute('INSERT INTO clan_members (clan_id, user_id, role, joined_date) VALUES (?, ?, ?, ?)',
+                   (clan_id, user_id, 'leader', datetime.now()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка при создании клана: {e}")
+        if user_id in clan_data:
+            del clan_data[user_id]
+        return
     
     await msg.answer(
         t['clan_created'].format(
@@ -993,25 +1228,26 @@ async def clan_server(msg: types.Message):
     
     del clan_data[user_id]
 
-@dp.message(lambda msg: msg.text in ["🏰 Мои кланы / My clans", "🏰 Мои кланы"])
+@dp.message(F.text.in_(["🏰 Мои кланы / My clans", "🏰 Мои кланы"]))
+@check_ban
 async def my_clans(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT c.id, c.name, c.tag, c.description, c.server, c.members, c.max_members
-        FROM clans c
-        JOIN clan_members cm ON c.id = cm.clan_id
-        WHERE cm.user_id = ? AND c.active = 1
-    ''', (user_id,))
-    results = cur.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT c.id, c.name, c.tag, c.description, c.server, c.members, c.max_members
+            FROM clans c
+            JOIN clan_members cm ON c.id = cm.clan_id
+            WHERE cm.user_id = ? AND c.active = 1
+        ''', (user_id,))
+        results = cur.fetchall()
+        conn.close()
+    except:
+        results = []
     
     if not results:
         await msg.answer("🏰 Вы не состоите ни в одном клане / You are not in any clan")
@@ -1028,78 +1264,25 @@ async def my_clans(msg: types.Message):
     await msg.answer(text)
 
 # ============================================
-# ========== PROFILE MANAGEMENT ==========
+# ========== STATS ==========
 # ============================================
 
-@dp.message(lambda msg: msg.text in ["👤 Моя анкета", "👤 My profile"])
-async def my_profile(msg: types.Message):
-    user_id = msg.from_user.id
-    lang = get_lang(user_id)
-    t = TEXTS.get(lang, TEXTS['ru'])
-    
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        SELECT looking_for, description, age, microphone, timezone, max_players, steam_id, avatar_path 
-        FROM profiles WHERE user_id = ? AND active = 1
-    ''', (user_id,))
-    r = cur.fetchone()
-    conn.close()
-    
-    if not r:
-        await msg.answer("❌ У вас нет анкеты. Создайте её!")
-        return
-    
-    text = (
-        f"👤 **Ваша анкета:**\n\n"
-        f"👥 Ищет: {r[0]}\n"
-        f"🎂 Возраст: {r[2]}\n"
-        f"🎤 Микрофон: {r[3]}\n"
-        f"🕐 Часовой пояс: {r[4]}\n"
-        f"👥 Группа: {r[5]} чел.\n"
-        f"🆔 Steam: {r[6]}\n"
-        f"📝 {r[1]}\n"
-    )
-    
-    if r[7] and os.path.exists(r[7]):
-        photo = FSInputFile(r[7])
-        await msg.answer_photo(photo, caption=text)
-    else:
-        await msg.answer(text)
-
-@dp.message(lambda msg: msg.text in ["🗑 Удалить анкету", "🗑 Delete profile"])
-async def delete_profile(msg: types.Message):
-    user_id = msg.from_user.id
-    lang = get_lang(user_id)
-    t = TEXTS.get(lang, TEXTS['ru'])
-    
-    if is_banned(user_id):
-        return
-    
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    await msg.answer(t['deleted'], reply_markup=main_menu(lang))
-
-@dp.message(lambda msg: msg.text in ["📊 Всего игроков", "📊 Total players"])
+@dp.message(F.text.in_(["📊 Всего игроков", "📊 Total players"]))
+@check_ban
 async def stats(msg: types.Message):
     user_id = msg.from_user.id
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
-        return
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
+        count = cur.fetchone()[0]
+        conn.close()
+    except:
+        count = 0
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
-    count = cur.fetchone()[0]
-    conn.close()
     await msg.answer(t['stats'].format(count=count))
 
 # ============================================
@@ -1113,17 +1296,15 @@ async def report_user(call: types.CallbackQuery):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    if is_banned(user_id):
+    ban_reason = is_banned(user_id)
+    if ban_reason:
         await call.answer("Вы забанены / You are banned")
         return
     
     await call.message.answer("📝 Опишите причину жалобы (кратко):")
     await call.answer()
     
-    # Сохраняем временные данные
     report_data[user_id] = {'target': target_id}
-
-report_data = {}
 
 @dp.message(lambda msg: msg.from_user.id in report_data)
 async def handle_report_reason(msg: types.Message):
@@ -1133,44 +1314,42 @@ async def handle_report_reason(msg: types.Message):
     lang = get_lang(user_id)
     t = TEXTS.get(lang, TEXTS['ru'])
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('''
-        INSERT INTO reports (reporter_id, reported_id, reason, date)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, target_id, reason, datetime.now()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('''
+            INSERT INTO reports (reporter_id, reported_id, reason, date)
+            VALUES (?, ?, ?, ?)
+        ''', (user_id, target_id, reason, datetime.now()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        del report_data[user_id]
+        return
     
     await msg.answer(t['report_sent'])
     del report_data[user_id]
     
-    # Уведомление админам и модераторам
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT user_id FROM moderators')
-    mods = cur.fetchall()
-    conn.close()
-    
-    for mod in mods:
-        try:
-            await bot.send_message(mod[0], 
-                f"⚠️ **Новая жалоба!**\n"
-                f"От: @{msg.from_user.username or user_id}\n"
-                f"На: @{target_id}\n"
-                f"Причина: {reason}\n"
-                f"Используй /reports для просмотра")
-        except:
-            pass
-    
-    # Уведомление владельцу
+    # Уведомление модераторам
     try:
-        await bot.send_message(OWNER_ID,
-            f"⚠️ **Новая жалоба!**\n"
-            f"От: @{msg.from_user.username or user_id}\n"
-            f"На: @{target_id}\n"
-            f"Причина: {reason}\n"
-            f"Используй /reports для просмотра")
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT user_id FROM moderators')
+        mods = cur.fetchall()
+        conn.close()
+        
+        for mod in mods:
+            try:
+                await bot.send_message(mod[0], 
+                    f"⚠️ **Новая жалоба!**\n"
+                    f"От: @{msg.from_user.username or user_id}\n"
+                    f"На: @{target_id}\n"
+                    f"Причина: {reason}\n"
+                    f"Для просмотра: /reports")
+                await asyncio.sleep(0.05)
+            except:
+                pass
     except:
         pass
 
@@ -1181,7 +1360,6 @@ async def handle_report_reason(msg: types.Message):
 @dp.message(Command("admin"))
 async def admin_panel_cmd(msg: types.Message):
     user_id = msg.from_user.id
-    lang = get_lang(user_id)
     
     if not is_admin(user_id):
         await msg.answer("🚫 У вас нет доступа к админ-панели.")
@@ -1196,7 +1374,6 @@ async def admin_panel_cmd(msg: types.Message):
 @dp.callback_query(lambda c: c.data.startswith('admin_'))
 async def admin_actions(call: types.CallbackQuery):
     user_id = call.from_user.id
-    lang = get_lang(user_id)
     
     if not is_admin(user_id):
         await call.answer("🚫 Нет доступа")
@@ -1205,17 +1382,20 @@ async def admin_actions(call: types.CallbackQuery):
     action = call.data.split('_')[1]
     
     if action == 'stats':
-        conn = sqlite3.connect('rust_clan.db')
-        cur = conn.cursor()
-        cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
-        profiles = cur.fetchone()[0]
-        cur.execute('SELECT COUNT(*) FROM clans WHERE active = 1')
-        clans = cur.fetchone()[0]
-        cur.execute('SELECT COUNT(*) FROM reports WHERE resolved = 0')
-        reports = cur.fetchone()[0]
-        cur.execute('SELECT COUNT(*) FROM bans')
-        bans = cur.fetchone()[0]
-        conn.close()
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
+            profiles = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM clans WHERE active = 1')
+            clans = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM reports WHERE resolved = 0')
+            reports = cur.fetchone()[0]
+            cur.execute('SELECT COUNT(*) FROM bans')
+            bans = cur.fetchone()[0]
+            conn.close()
+        except:
+            profiles = clans = reports = bans = 0
         
         await call.message.edit_text(
             f"📊 **Полная статистика**\n\n"
@@ -1228,14 +1408,17 @@ async def admin_actions(call: types.CallbackQuery):
         await call.answer()
     
     elif action == 'reports':
-        conn = sqlite3.connect('rust_clan.db')
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT id, reporter_id, reported_id, reason, date 
-            FROM reports WHERE resolved = 0 ORDER BY id DESC
-        ''')
-        results = cur.fetchall()
-        conn.close()
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('''
+                SELECT id, reporter_id, reported_id, reason, date 
+                FROM reports WHERE resolved = 0 ORDER BY id DESC
+            ''')
+            results = cur.fetchall()
+            conn.close()
+        except:
+            results = []
         
         if not results:
             await call.message.edit_text(
@@ -1256,13 +1439,16 @@ async def admin_actions(call: types.CallbackQuery):
         await call.answer()
     
     elif action == 'moderators':
-        conn = sqlite3.connect('rust_clan.db')
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT user_id, date FROM moderators ORDER BY date DESC
-        ''')
-        results = cur.fetchall()
-        conn.close()
+        try:
+            conn = sqlite3.connect('rust_clan.db')
+            cur = conn.cursor()
+            cur.execute('''
+                SELECT user_id, date FROM moderators ORDER BY date DESC
+            ''')
+            results = cur.fetchall()
+            conn.close()
+        except:
+            results = []
         
         text = "👥 **Модераторы:**\n\n"
         if results:
@@ -1288,8 +1474,6 @@ async def admin_actions(call: types.CallbackQuery):
         await call.message.delete()
         await call.answer()
 
-admin_state = {}
-
 @dp.message(lambda msg: msg.from_user.id in admin_state and admin_state[msg.from_user.id].get('action') == 'broadcast_waiting')
 async def admin_broadcast(msg: types.Message):
     user_id = msg.from_user.id
@@ -1298,11 +1482,15 @@ async def admin_broadcast(msg: types.Message):
         return
     
     text = msg.text
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT user_id FROM profiles WHERE active = 1')
-    users = cur.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT user_id FROM profiles WHERE active = 1')
+        users = cur.fetchall()
+        conn.close()
+    except:
+        await msg.answer("❌ Ошибка при получении списка пользователей")
+        return
     
     sent = 0
     for u in users:
@@ -1314,7 +1502,12 @@ async def admin_broadcast(msg: types.Message):
             pass
     
     await msg.answer(f"✅ Объявление отправлено {sent} пользователям.")
-    del admin_state[user_id]
+    if user_id in admin_state:
+        del admin_state[user_id]
+
+# ============================================
+# ========== ADMIN COMMANDS ==========
+# ============================================
 
 @dp.message(Command("ban"))
 async def ban_user(msg: types.Message):
@@ -1329,16 +1522,25 @@ async def ban_user(msg: types.Message):
         await msg.answer("Использование: /ban <user_id> <причина>")
         return
     
-    target_id = int(args[1])
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID пользователя")
+        return
+    
     reason = args[2]
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('INSERT INTO bans (user_id, reason, banned_by, date) VALUES (?, ?, ?, ?)',
-               (target_id, reason, user_id, datetime.now()))
-    cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (target_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('INSERT INTO bans (user_id, reason, banned_by, date) VALUES (?, ?, ?, ?)',
+                   (target_id, reason, user_id, datetime.now()))
+        cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (target_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Пользователь {target_id} забанен. Причина: {reason}")
     
@@ -1360,13 +1562,21 @@ async def unban_user(msg: types.Message):
         await msg.answer("Использование: /unban <user_id>")
         return
     
-    target_id = int(args[1])
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID пользователя")
+        return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('DELETE FROM bans WHERE user_id = ?', (target_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('DELETE FROM bans WHERE user_id = ?', (target_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Пользователь {target_id} разбанен.")
 
@@ -1383,13 +1593,21 @@ async def resolve_report(msg: types.Message):
         await msg.answer("Использование: /resolve <report_id>")
         return
     
-    report_id = int(args[1])
+    try:
+        report_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID жалобы")
+        return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('UPDATE reports SET resolved = 1 WHERE id = ?', (report_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('UPDATE reports SET resolved = 1 WHERE id = ?', (report_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Жалоба {report_id} закрыта.")
 
@@ -1406,14 +1624,22 @@ async def set_moderator(msg: types.Message):
         await msg.answer("Использование: /set_moderator <user_id>")
         return
     
-    target_id = int(args[1])
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID пользователя")
+        return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('INSERT OR REPLACE INTO moderators (user_id, assigned_by, date) VALUES (?, ?, ?)',
-               (target_id, user_id, datetime.now()))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('INSERT OR REPLACE INTO moderators (user_id, assigned_by, date) VALUES (?, ?, ?)',
+                   (target_id, user_id, datetime.now()))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Пользователь {target_id} назначен модератором.")
     
@@ -1435,13 +1661,21 @@ async def remove_moderator(msg: types.Message):
         await msg.answer("Использование: /remove_moderator <user_id>")
         return
     
-    target_id = int(args[1])
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID пользователя")
+        return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('DELETE FROM moderators WHERE user_id = ?', (target_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('DELETE FROM moderators WHERE user_id = ?', (target_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Пользователь {target_id} убран из модераторов.")
 
@@ -1453,11 +1687,15 @@ async def list_moderators(msg: types.Message):
         await msg.answer("🚫 Нет доступа")
         return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('SELECT user_id, date FROM moderators')
-    results = cur.fetchall()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('SELECT user_id, date FROM moderators')
+        results = cur.fetchall()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     if not results:
         await msg.answer("👥 Модераторов нет.")
@@ -1482,13 +1720,21 @@ async def admin_delete_profile(msg: types.Message):
         await msg.answer("Использование: /delete_profile <user_id>")
         return
     
-    target_id = int(args[1])
+    try:
+        target_id = int(args[1])
+    except ValueError:
+        await msg.answer("❌ Неверный ID пользователя")
+        return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (target_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        cur.execute('UPDATE profiles SET active = 0 WHERE user_id = ?', (target_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(f"✅ Анкета пользователя {target_id} удалена.")
 
@@ -1500,27 +1746,31 @@ async def full_stats(msg: types.Message):
         await msg.answer("🚫 Нет доступа")
         return
     
-    conn = sqlite3.connect('rust_clan.db')
-    cur = conn.cursor()
-    
-    cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
-    profiles = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM profiles')
-    total_profiles = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM clans WHERE active = 1')
-    clans = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM reports WHERE resolved = 0')
-    reports = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM bans')
-    bans = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM moderators')
-    moderators = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM chat_messages')
-    messages = cur.fetchone()[0]
-    cur.execute('SELECT COUNT(*) FROM swipes')
-    swipes = cur.fetchone()[0]
-    
-    conn.close()
+    try:
+        conn = sqlite3.connect('rust_clan.db')
+        cur = conn.cursor()
+        
+        cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
+        profiles = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM profiles')
+        total_profiles = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM clans WHERE active = 1')
+        clans = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM reports WHERE resolved = 0')
+        reports = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM bans')
+        bans = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM moderators')
+        moderators = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM chat_messages')
+        messages = cur.fetchone()[0]
+        cur.execute('SELECT COUNT(*) FROM swipes')
+        swipes = cur.fetchone()[0]
+        
+        conn.close()
+    except Exception as e:
+        await msg.answer(f"❌ Ошибка: {e}")
+        return
     
     await msg.answer(
         f"📊 **Полная статистика бота**\n\n"
@@ -1540,7 +1790,7 @@ async def full_stats(msg: types.Message):
 
 async def main():
     os.makedirs("avatars", exist_ok=True)
-    print("🤖 Бот RUST LFG Bot v7.0 запущен!")
+    print("🤖 Бот RUST LFG Bot v8.3 запущен!")
     print(f"👑 Владелец: {OWNER_ID}")
     print("📱 Напишите /start в Telegram")
     await dp.start_polling(bot)
