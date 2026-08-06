@@ -1,4 +1,4 @@
-# FORCE_REDEPLOY_2 - принудительное обновление для Railway
+# FORCE_REDEPLOY_3 - новая структура анкеты
 
 import os
 import asyncio
@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram import F
 
-# ===== ТОКЕН ВСТАВЛЕН ПРЯМО В КОД =====
+# ===== ТОКЕН =====
 TOKEN = "8804113008:AAGgdo_FZMDoWr2C0SBChjo4-HMRiEog-D4"
 
 bot = Bot(token=TOKEN)
@@ -24,12 +24,10 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             username TEXT,
-            role TEXT,
-            rank TEXT,
-            looking TEXT,
+            looking_for TEXT,
+            description TEXT,
             steam_id TEXT,
             avatar_path TEXT,
-            description TEXT,
             date TEXT,
             active INTEGER DEFAULT 1
         )
@@ -39,7 +37,7 @@ def init_db():
 
 init_db()
 
-# ===== КЛАВИАТУРА (ИСПРАВЛЕННАЯ) =====
+# ===== КЛАВИАТУРА ГЛАВНОГО МЕНЮ =====
 def main_menu():
     kb = types.ReplyKeyboardMarkup(
         keyboard=[
@@ -59,6 +57,20 @@ def main_menu():
     )
     return kb
 
+# ===== INLINE-КНОПКИ: ВЫБОР ЦЕЛИ =====
+def looking_buttons():
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🤝 Ищу тиммейта(ов)", callback_data="looking_timmeit"),
+            InlineKeyboardButton(text="🔍 Ищу клан", callback_data="looking_clan")
+        ],
+        [
+            InlineKeyboardButton(text="🏰 Ищем игроков в клан", callback_data="looking_clan_search")
+        ]
+    ])
+    return kb
+
+# ===== ХРАНИЛИЩЕ ДАННЫХ ПОЛЬЗОВАТЕЛЕЙ =====
 user_data = {}
 
 # ===== КОМАНДА START =====
@@ -67,96 +79,170 @@ async def start(msg: types.Message):
     await msg.answer(
         "🦀 Добро пожаловать в бот для поиска кланов в RUST!\n\n"
         "Здесь вы можете:\n"
-        "✅ Создать анкету с фото и Steam ID\n"
+        "✅ Создать анкету\n"
         "✅ Найти тиммейтов и кланы\n"
         "✅ Просматривать анкеты других игроков\n\n"
         "Выберите действие:",
         reply_markup=main_menu()
     )
 
-# ===== СОЗДАНИЕ АНКЕТЫ =====
+# ===== СОЗДАНИЕ АНКЕТЫ - ШАГ 1 =====
 @dp.message(F.text == "📝 Создать анкету")
 async def create_start(msg: types.Message):
-    user_data[msg.from_user.id] = {'step': 'role'}
     await msg.answer(
-        "📝 **Создание анкеты**\n\n"
-        "Шаг 1 из 5: Укажите вашу **РОЛЬ**\n"
-        "Примеры: ПВП, Строитель, Фармер, Рейдер, Универсал"
+        "👥 **Кого вы ищете?**\n\n"
+        "Выберите один из вариантов:",
+        reply_markup=looking_buttons()
     )
 
-@dp.message(lambda msg: msg.from_user.id in user_data)
-async def create_steps(msg: types.Message):
+# ===== ОБРАБОТЧИК INLINE-КНОПОК =====
+@dp.callback_query()
+async def handle_callback(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    data = call.data
+    
+    # Инициализируем данные пользователя, если их нет
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    
+    if data == "looking_timmeit":
+        user_data[user_id]['looking_for'] = "тиммейта(ов)"
+        await call.message.edit_text(
+            "🤝 **Вы ищете тиммейта(ов)**\n\n"
+            "📝 **Расскажи о себе:**\n"
+            "— Какой у тебя стиль игры?\n"
+            "— Сколько часов в RUST?\n"
+            "— Есть ли микрофон?\n"
+            "— Когда обычно играешь?\n\n"
+            "Напиши подробно:"
+        )
+        
+    elif data == "looking_clan":
+        user_data[user_id]['looking_for'] = "клан"
+        await call.message.edit_text(
+            "🔍 **Вы ищете клан**\n\n"
+            "📝 **Расскажи о себе:**\n"
+            "— Сколько часов в RUST?\n"
+            "— Что умеешь (строить/фармить/ПВП)?\n"
+            "— Что ищешь в клане?\n\n"
+            "Напиши подробно:"
+        )
+        
+    elif data == "looking_clan_search":
+        user_data[user_id]['looking_for'] = "игроков в клан"
+        await call.message.edit_text(
+            "🏰 **Вы ищете игроков в клан**\n\n"
+            "📝 **Расскажи о своём клане:**\n"
+            "— Название клана?\n"
+            "— Сколько человек в клане?\n"
+            "— На каком сервере играете?\n"
+            "— Какие требования к игрокам?\n\n"
+            "Напиши подробно:"
+        )
+    
+    # Устанавливаем следующий шаг
+    user_data[user_id]['step'] = 'description'
+    await call.answer()
+
+# ===== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ =====
+@dp.message(lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id].get('step') == 'description')
+async def handle_description(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]['description'] = msg.text
+    user_data[user_id]['step'] = 'steam'
+    
+    await msg.answer(
+        "🆔 **Теперь укажи свой Steam ID**\n\n"
+        "Введи свой Steam ID или код дружбы.\n"
+        "Если нет — напиши '-'",
+        reply_markup=main_menu()
+    )
+
+# ===== ОБРАБОТЧИК STEAM ID =====
+@dp.message(lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id].get('step') == 'steam')
+async def handle_steam(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]['steam_id'] = msg.text
+    user_data[user_id]['step'] = 'avatar'
+    
+    await msg.answer(
+        "📸 **Отправь своё ФОТО** (аватарку)\n\n"
+        "Просто отправь фото.\n"
+        "Или нажми '-' чтобы пропустить:",
+        reply_markup=main_menu()
+    )
+
+# ===== ОБРАБОТЧИК ФОТО =====
+@dp.message(lambda msg: msg.from_user.id in user_data and user_data[msg.from_user.id].get('step') == 'avatar')
+async def handle_avatar(msg: types.Message):
     user_id = msg.from_user.id
     data = user_data[user_id]
-    step = data.get('step')
     
-    if step == 'role':
-        data['role'] = msg.text
-        data['step'] = 'rank'
-        await msg.answer("Шаг 2 из 5: Укажите ваш **РАНГ/ОПЫТ**\nПримеры: Новичок, Средний, Профи, Ветеран")
+    # Проверяем, что это фото или команда пропуска
+    if msg.text and msg.text == '-':
+        data['avatar_path'] = None
+        await save_profile(msg)
+        return
     
-    elif step == 'rank':
-        data['rank'] = msg.text
-        data['step'] = 'looking'
-        await msg.answer("Шаг 3 из 5: Кого вы **ИЩЕТЕ**?\nПримеры: Клан, Тиммейтов, Сквад, Пати")
-    
-    elif step == 'looking':
-        data['looking'] = msg.text
-        data['step'] = 'steam'
-        await msg.answer("Шаг 4 из 5: Ваш **STEAM ID** (или '-' если нет)")
-    
-    elif step == 'steam':
-        data['steam'] = msg.text
-        data['step'] = 'avatar'
-        await msg.answer("Шаг 5 из 5: Отправьте **ФОТО** (или '-' чтобы пропустить)")
-    
-    elif step == 'avatar':
-        if msg.text and msg.text == '-':
-            data['avatar'] = None
-            await save_profile(msg)
-        elif msg.photo:
-            file = await bot.get_file(msg.photo[-1].file_id)
-            file_path = f"avatars/{user_id}.jpg"
-            os.makedirs("avatars", exist_ok=True)
-            await bot.download_file(file.file_path, file_path)
-            data['avatar'] = file_path
-            await save_profile(msg)
-        else:
-            await msg.answer("❌ Отправьте фото или нажмите '-'")
+    if msg.photo:
+        file = await bot.get_file(msg.photo[-1].file_id)
+        file_path = f"avatars/{user_id}.jpg"
+        os.makedirs("avatars", exist_ok=True)
+        await bot.download_file(file.file_path, file_path)
+        data['avatar_path'] = file_path
+        await save_profile(msg)
+    else:
+        await msg.answer("❌ Отправь фото или нажми '-' чтобы пропустить")
 
+# ===== СОХРАНЕНИЕ АНКЕТЫ =====
 async def save_profile(msg: types.Message):
     user_id = msg.from_user.id
     data = user_data[user_id]
     
+    # Проверяем, что все данные есть
+    if 'looking_for' not in data or 'description' not in data:
+        await msg.answer("❌ Ошибка! Попробуй создать анкету заново.")
+        del user_data[user_id]
+        return
+    
     conn = sqlite3.connect('rust_clan.db')
     cur = conn.cursor()
+    
     cur.execute('''
         INSERT INTO profiles 
-        (user_id, username, role, rank, looking, steam_id, avatar_path, description, date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, msg.from_user.username or "Не указан", 
-          data['role'], data['rank'], data['looking'], 
-          data['steam'], data.get('avatar'), "Игрок RUST", datetime.now()))
+        (user_id, username, looking_for, description, steam_id, avatar_path, date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        user_id, 
+        msg.from_user.username or "Не указан",
+        data['looking_for'],
+        data['description'],
+        data.get('steam_id', 'Не указан'),
+        data.get('avatar_path'),
+        datetime.now()
+    ))
     conn.commit()
     conn.close()
     
-    avatar_text = "✅ Есть" if data.get('avatar') else "❌ Нет"
+    # Показываем готовую анкету
+    avatar_text = "✅ Есть" if data.get('avatar_path') else "❌ Нет"
     
     await msg.answer(
         f"✅ **Анкета создана!**\n\n"
-        f"🎯 Роль: {data['role']}\n"
-        f"⭐ Ранг: {data['rank']}\n"
-        f"🔎 Ищет: {data['looking']}\n"
-        f"🆔 Steam: {data['steam']}\n"
+        f"👥 Ищет: {data['looking_for']}\n"
+        f"📝 О себе: {data['description']}\n"
+        f"🆔 Steam ID: {data.get('steam_id', 'Не указан')}\n"
         f"📸 Аватар: {avatar_text}\n\n"
         "Теперь вас могут найти!",
         reply_markup=main_menu()
     )
     
-    if data.get('avatar'):
-        photo = FSInputFile(data['avatar'])
+    # Отправляем фото если есть
+    if data.get('avatar_path'):
+        photo = FSInputFile(data['avatar_path'])
         await msg.answer_photo(photo, caption="📸 Ваша аватарка")
     
+    # Удаляем данные пользователя
     del user_data[user_id]
 
 # ===== ПОИСК ИГРОКОВ =====
@@ -165,7 +251,7 @@ async def search(msg: types.Message):
     conn = sqlite3.connect('rust_clan.db')
     cur = conn.cursor()
     cur.execute('''
-        SELECT user_id, username, role, rank, looking, steam_id, avatar_path 
+        SELECT user_id, username, looking_for, description, steam_id, avatar_path 
         FROM profiles WHERE active = 1 LIMIT 20
     ''')
     results = cur.fetchall()
@@ -176,14 +262,13 @@ async def search(msg: types.Message):
         return
     
     for r in results:
-        user_id, username, role, rank, looking, steam, avatar = r
+        user_id, username, looking_for, description, steam_id, avatar = r
         
         text = (
             f"👤 @{username}\n"
-            f"🎯 Роль: {role}\n"
-            f"⭐ Ранг: {rank}\n"
-            f"🔎 Ищет: {looking}\n"
-            f"🆔 Steam: {steam}\n"
+            f"👥 Ищет: {looking_for}\n"
+            f"📝 {description}\n"
+            f"🆔 Steam: {steam_id}\n"
             f"➖➖➖➖➖"
         )
         
@@ -203,7 +288,7 @@ async def my(msg: types.Message):
     conn = sqlite3.connect('rust_clan.db')
     cur = conn.cursor()
     cur.execute('''
-        SELECT role, rank, looking, steam_id, avatar_path 
+        SELECT looking_for, description, steam_id, avatar_path 
         FROM profiles WHERE user_id = ? AND active = 1
     ''', (msg.from_user.id,))
     r = cur.fetchone()
@@ -215,14 +300,13 @@ async def my(msg: types.Message):
     
     text = (
         f"👤 **Ваша анкета:**\n\n"
-        f"🎯 Роль: {r[0]}\n"
-        f"⭐ Ранг: {r[1]}\n"
-        f"🔎 Ищет: {r[2]}\n"
-        f"🆔 Steam: {r[3]}\n"
+        f"👥 Ищет: {r[0]}\n"
+        f"📝 {r[1]}\n"
+        f"🆔 Steam: {r[2]}\n"
     )
     
-    if r[4] and os.path.exists(r[4]):
-        photo = FSInputFile(r[4])
+    if r[3] and os.path.exists(r[3]):
+        photo = FSInputFile(r[3])
         await msg.answer_photo(photo, caption=text)
     else:
         await msg.answer(text)
