@@ -1,4 +1,4 @@
-# FORCE_REDEPLOY_3 - новая структура анкеты
+# FORCE_REDEPLOY_4 - исправлен синтаксис InlineKeyboardButton
 
 import os
 import asyncio
@@ -245,35 +245,45 @@ async def save_profile(msg: types.Message):
     # Удаляем данные пользователя
     del user_data[user_id]
 
-# ===== ПОИСК ИГРОКОВ =====
+# ===== ПОИСК ИГРОКОВ (ИСПРАВЛЕННЫЙ) =====
 @dp.message(F.text == "🔍 Искать игроков")
 async def search(msg: types.Message):
     conn = sqlite3.connect('rust_clan.db')
     cur = conn.cursor()
+    
+    cur.execute('SELECT COUNT(*) FROM profiles WHERE active = 1')
+    count = cur.fetchone()[0]
+    
+    if count == 0:
+        await msg.answer("😕 В базе пока нет активных анкет. Создайте свою первую!")
+        conn.close()
+        return
+    
     cur.execute('''
         SELECT user_id, username, looking_for, description, steam_id, avatar_path 
-        FROM profiles WHERE active = 1 LIMIT 20
+        FROM profiles WHERE active = 1 ORDER BY id DESC LIMIT 20
     ''')
     results = cur.fetchall()
     conn.close()
     
     if not results:
-        await msg.answer("😕 Пока никого нет. Создайте анкету!")
+        await msg.answer("😕 Анкеты есть, но не удалось их загрузить. Попробуйте позже.")
         return
     
+    sent_count = 0
     for r in results:
         user_id, username, looking_for, description, steam_id, avatar = r
         
         text = (
-            f"👤 @{username}\n"
+            f"👤 @{username or 'Не указан'}\n"
             f"👥 Ищет: {looking_for}\n"
-            f"📝 {description}\n"
-            f"🆔 Steam: {steam_id}\n"
+            f"📝 {description[:200]}{'...' if len(description) > 200 else ''}\n"
+            f"🆔 Steam: {steam_id or 'Не указан'}\n"
             f"➖➖➖➖➖"
         )
         
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton("💬 Написать", url=f"tg://user?id={user_id}")]
+            [InlineKeyboardButton(text="💬 Написать", url=f"tg://user?id={user_id}")]
         ])
         
         if avatar and os.path.exists(avatar):
@@ -281,6 +291,11 @@ async def search(msg: types.Message):
             await msg.answer_photo(photo, caption=text, reply_markup=kb)
         else:
             await msg.answer(text, reply_markup=kb)
+        
+        sent_count += 1
+        await asyncio.sleep(0.3)
+    
+    await msg.answer(f"📊 Показано {sent_count} из {count} активных анкет.")
 
 # ===== МОЯ АНКЕТА =====
 @dp.message(F.text == "👤 Моя анкета")
