@@ -1,24 +1,27 @@
-# ===== RUST LFG BOT v8.5 (Clean & Secure) =====
+# ===== RUST LFG BOT v8.6 =====
 
 import os
 import asyncio
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from contextlib import contextmanager
 from dotenv import load_dotenv
 
 from aiogram import Bot, Dispatcher, types, BaseMiddleware, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    FSInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 
 # ================== CONFIG ==================
 load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН"
+OWNER_ID = int(os.getenv("OWNER_ID") or "6276697402")
 
-if not TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден в .env файле!")
+if not TOKEN or TOKEN == "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН":
+    raise ValueError("❌ Укажи токен бота в .env или прямо в коде!")
 
 ADMIN_IDS = [OWNER_ID]
 
@@ -200,32 +203,10 @@ TEXTS = {
         'already_in_clan': "❌ Вы уже состоите в клане.",
         'age_question': "🎂 Выберите возраст:",
         'mic_question': "🎤 Есть ли у вас микрофон?",
-        'tz_question': "🕐 Выберите часовой пояс:",
         'group_question': "👥 Сколько человек вы ищете?",
         'description_question': "📝 Расскажите о себе (макс. 500 символов):",
         'steam_question': "🆔 Ваш Steam ID (или '-' пропустить):",
         'avatar_question': "📸 Отправьте фото или '-' чтобы пропустить:",
-    },
-    'en': {
-        'start': "🦀 Welcome to RustLFG Bot!\n\nYou can:\n✅ Create a profile\n✅ Find a team\n✅ Create a clan\n✅ Chat\n\nChoose an action:",
-        'profile_created': "✅ Profile created!\n\n👥 Looking for: {looking}\n🎂 Age: {age}\n📝 {desc}\n🎤 Mic: {mic}\n🕐 Timezone: {tz}\n👥 Group: {max}\n🆔 Steam: {steam}\n📸 Avatar: {avatar}",
-        'no_profiles': "😕 No active profiles.",
-        'deleted': "✅ Profile deleted",
-        'stats': "📊 Total active players: **{count}**",
-        'profile_already_exists': "You already have a profile.",
-        'confirm_delete': "⚠️ Are you sure you want to delete your profile?",
-        'cancel': "✅ Action cancelled.",
-        'spam_warning': "⏳ Don't spam! Wait a few seconds.",
-        'desc_too_long': "❌ Description too long (max 500 chars).",
-        'steam_invalid': "❌ Steam ID must contain only numbers (or '-' to skip).",
-        'already_in_clan': "❌ You are already in a clan.",
-        'age_question': "🎂 Select your age:",
-        'mic_question': "🎤 Do you have a microphone?",
-        'tz_question': "🕐 Select your timezone:",
-        'group_question': "👥 How many people are you looking for?",
-        'description_question': "📝 Tell us about yourself (max 500 chars):",
-        'steam_question': "🆔 Your Steam ID (or '-' to skip):",
-        'avatar_question': "📸 Send a photo or '-' to skip:",
     }
 }
 
@@ -245,7 +226,7 @@ def get_text(user_id: int, key: str, **kwargs) -> str:
     text = TEXTS.get(lang, TEXTS["ru"]).get(key, key)
     return text.format(**kwargs) if kwargs else text
 
-def is_banned(user_id: int) -> str | None:
+def is_banned(user_id: int):
     try:
         with get_db() as conn:
             cur = conn.cursor()
@@ -258,17 +239,6 @@ def is_banned(user_id: int) -> str | None:
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-def is_moderator(user_id: int) -> bool:
-    if is_admin(user_id):
-        return True
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT 1 FROM moderators WHERE user_id = ?", (user_id,))
-            return cur.fetchone() is not None
-    except Exception:
-        return False
-
 def check_rate_limit(user_id: int) -> bool:
     now = datetime.now()
     last = last_message_time.get(user_id)
@@ -279,7 +249,6 @@ def check_rate_limit(user_id: int) -> bool:
 
 # ================== KEYBOARDS ==================
 def main_menu(lang: str = "ru") -> ReplyKeyboardMarkup:
-    t = TEXTS.get(lang, TEXTS["ru"])
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📝 Создать анкету"), KeyboardButton(text="🔍 Искать игроков")],
@@ -293,21 +262,16 @@ def main_menu(lang: str = "ru") -> ReplyKeyboardMarkup:
 
 def age_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=a) for a in ["16+", "18+", "21+", "25+", "30+"]]],
+        keyboard=[
+            [KeyboardButton(text="16+"), KeyboardButton(text="18+"), KeyboardButton(text="21+")],
+            [KeyboardButton(text="25+"), KeyboardButton(text="30+"), KeyboardButton(text="Другой")]
+        ],
         resize_keyboard=True
     )
 
 def mic_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🎤 Да"), KeyboardButton(text="🔇 Нет")]],
-        resize_keyboard=True
-    )
-
-def tz_keyboard() -> ReplyKeyboardMarkup:
-    tzs = [f"UTC{i:+d}" for i in range(-12, 13)]
-    rows = [tzs[i:i+5] for i in range(0, len(tzs), 5)]
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=tz) for tz in row] for row in rows],
         resize_keyboard=True
     )
 
@@ -326,7 +290,7 @@ report_data: dict[int, dict] = {}
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
     user_id = msg.from_user.id
-    lang = msg.from_user.language_code if msg.from_user.language_code in ("ru", "en") else "ru"
+    lang = "ru"
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -348,10 +312,10 @@ async def cmd_cancel(msg: types.Message):
     user_data.pop(user_id, None)
     clan_data.pop(user_id, None)
     report_data.pop(user_id, None)
-    await msg.answer(get_text(user_id, "cancel"), reply_markup=main_menu(get_lang(user_id)))
+    await msg.answer(get_text(user_id, "cancel"), reply_markup=main_menu())
 
 # ================== PROFILE CREATION ==================
-@dp.message(F.text.in_(["📝 Создать анкету", "📝 Create profile"]))
+@dp.message(F.text.in_(["📝 Создать анкету"]))
 async def create_profile_start(msg: types.Message):
     user_id = msg.from_user.id
 
@@ -367,38 +331,75 @@ async def create_profile_start(msg: types.Message):
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "age")
 async def profile_age(msg: types.Message):
-    if msg.text not in ["16+", "18+", "21+", "25+", "30+"]:
-        await msg.answer("Выберите возраст кнопкой")
+    user_id = msg.from_user.id
+    text = msg.text.strip()
+
+    if text == "Другой":
+        user_data[user_id]["step"] = "age_custom"
+        await msg.answer("🎂 Напишите свой возраст цифрами (например: 19, 23, 27):", reply_markup=ReplyKeyboardRemove())
         return
-    user_data[msg.from_user.id]["age"] = msg.text
-    user_data[msg.from_user.id]["step"] = "mic"
-    await msg.answer(get_text(msg.from_user.id, "mic_question"), reply_markup=mic_keyboard())
+
+    if text not in ["16+", "18+", "21+", "25+", "30+"]:
+        await msg.answer("Выберите возраст кнопкой или нажмите «Другой»")
+        return
+
+    user_data[user_id]["age"] = text
+    user_data[user_id]["step"] = "mic"
+    await msg.answer(get_text(user_id, "mic_question"), reply_markup=mic_keyboard())
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "age_custom")
+async def profile_age_custom(msg: types.Message):
+    user_id = msg.from_user.id
+    age = msg.text.strip()
+
+    if not age.isdigit() or not (14 <= int(age) <= 70):
+        await msg.answer("❌ Напишите возраст цифрами от 14 до 70")
+        return
+
+    user_data[user_id]["age"] = age
+    user_data[user_id]["step"] = "mic"
+    await msg.answer(get_text(user_id, "mic_question"), reply_markup=mic_keyboard())
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "mic")
 async def profile_mic(msg: types.Message):
+    user_id = msg.from_user.id
+
     if msg.text not in ["🎤 Да", "🔇 Нет"]:
         await msg.answer("Выберите кнопкой")
         return
-    user_data[msg.from_user.id]["mic"] = "Да" if "Да" in msg.text else "Нет"
-    user_data[msg.from_user.id]["step"] = "tz"
-    await msg.answer(get_text(msg.from_user.id, "tz_question"), reply_markup=tz_keyboard())
+
+    user_data[user_id]["mic"] = "Да" if "Да" in msg.text else "Нет"
+    user_data[user_id]["step"] = "tz"
+
+    await msg.answer(
+        "🕐 Укажите свой часовой пояс\n"
+        "Например: МСК+3, UTC+3, Москва, Питер",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tz")
 async def profile_tz(msg: types.Message):
-    if not msg.text.startswith("UTC"):
-        await msg.answer("Выберите часовой пояс кнопкой")
+    user_id = msg.from_user.id
+    tz = msg.text.strip()
+
+    if len(tz) < 2 or len(tz) > 25:
+        await msg.answer("Напишите часовой пояс коротко (например: МСК+3, UTC+3, Москва)")
         return
-    user_data[msg.from_user.id]["tz"] = msg.text
-    user_data[msg.from_user.id]["step"] = "group"
-    await msg.answer(get_text(msg.from_user.id, "group_question"), reply_markup=group_keyboard())
+
+    user_data[user_id]["tz"] = tz
+    user_data[user_id]["step"] = "group"
+    await msg.answer(get_text(user_id, "group_question"), reply_markup=group_keyboard())
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "group")
 async def profile_group(msg: types.Message):
+    user_id = msg.from_user.id
+
     if msg.text not in ["1", "2", "3", "4", "5"]:
         await msg.answer("Выберите число кнопкой")
         return
-    user_data[msg.from_user.id]["max_players"] = int(msg.text)
-    user_data[msg.from_user.id]["step"] = "looking"
+
+    user_data[user_id]["max_players"] = int(msg.text)
+    user_data[user_id]["step"] = "looking"
 
     kb = ReplyKeyboardMarkup(
         keyboard=[
@@ -413,28 +414,35 @@ async def profile_group(msg: types.Message):
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "looking")
 async def profile_looking(msg: types.Message):
-    user_data[msg.from_user.id]["looking"] = msg.text
-    user_data[msg.from_user.id]["step"] = "description"
-    await msg.answer(get_text(msg.from_user.id, "description_question"), reply_markup=types.ReplyKeyboardRemove())
+    user_id = msg.from_user.id
+    user_data[user_id]["looking"] = msg.text
+    user_data[user_id]["step"] = "description"
+    await msg.answer(get_text(user_id, "description_question"), reply_markup=ReplyKeyboardRemove())
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "description")
 async def profile_description(msg: types.Message):
+    user_id = msg.from_user.id
+
     if len(msg.text) > 500:
-        await msg.answer(get_text(msg.from_user.id, "desc_too_long"))
+        await msg.answer(get_text(user_id, "desc_too_long"))
         return
-    user_data[msg.from_user.id]["description"] = msg.text
-    user_data[msg.from_user.id]["step"] = "steam"
-    await msg.answer(get_text(msg.from_user.id, "steam_question"))
+
+    user_data[user_id]["description"] = msg.text
+    user_data[user_id]["step"] = "steam"
+    await msg.answer(get_text(user_id, "steam_question"))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "steam")
 async def profile_steam(msg: types.Message):
+    user_id = msg.from_user.id
     steam = msg.text.strip()
+
     if steam != "-" and not steam.isdigit():
-        await msg.answer(get_text(msg.from_user.id, "steam_invalid"))
+        await msg.answer(get_text(user_id, "steam_invalid"))
         return
-    user_data[msg.from_user.id]["steam"] = steam if steam != "-" else "Не указан"
-    user_data[msg.from_user.id]["step"] = "avatar"
-    await msg.answer(get_text(msg.from_user.id, "avatar_question"))
+
+    user_data[user_id]["steam"] = steam if steam != "-" else "Не указан"
+    user_data[user_id]["step"] = "avatar"
+    await msg.answer(get_text(user_id, "avatar_question"))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "avatar")
 async def profile_avatar(msg: types.Message):
@@ -452,9 +460,8 @@ async def profile_avatar(msg: types.Message):
         await msg.answer("Отправьте фото или '-'")
         return
 
-    # Ограничение размера (последнее фото обычно самое большое)
     photo = msg.photo[-1]
-    if photo.file_size and photo.file_size > 5 * 1024 * 1024:  # 5 MB
+    if photo.file_size and photo.file_size > 5 * 1024 * 1024:
         await msg.answer("❌ Фото слишком большое (макс. 5 МБ)")
         return
 
@@ -474,8 +481,6 @@ async def save_profile(msg: types.Message):
     if not data:
         await msg.answer("❌ Данные анкеты потеряны. Начните заново.")
         return
-
-    lang = get_lang(user_id)
 
     try:
         with get_db() as conn:
@@ -497,7 +502,7 @@ async def save_profile(msg: types.Message):
                 data.get("max_players", 1),
                 data.get("avatar_path"),
                 datetime.now().isoformat(),
-                lang
+                "ru"
             ))
             conn.commit()
     except Exception as e:
@@ -516,7 +521,7 @@ async def save_profile(msg: types.Message):
                  max=data.get("max_players"),
                  steam=data.get("steam"),
                  avatar=avatar_text),
-        reply_markup=main_menu(lang)
+        reply_markup=main_menu()
     )
 
     if data.get("avatar_path") and os.path.exists(data["avatar_path"]):
@@ -528,7 +533,7 @@ async def save_profile(msg: types.Message):
     user_data.pop(user_id, None)
 
 # ================== PROFILE MANAGEMENT ==================
-@dp.message(F.text.in_(["👤 Моя анкета", "👤 My profile"]))
+@dp.message(F.text.in_(["👤 Моя анкета"]))
 async def my_profile(msg: types.Message):
     user_id = msg.from_user.id
     with get_db() as conn:
@@ -563,7 +568,7 @@ async def my_profile(msg: types.Message):
             pass
     await msg.answer(text)
 
-@dp.message(F.text.in_(["🗑 Удалить анкету", "🗑 Delete profile"]))
+@dp.message(F.text.in_(["🗑 Удалить анкету"]))
 async def delete_profile_confirm(msg: types.Message):
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да", callback_data="delete_yes")],
@@ -585,7 +590,7 @@ async def delete_profile_callback(call: types.CallbackQuery):
     await call.answer()
 
 # ================== SEARCH ==================
-@dp.message(F.text.in_(["🔍 Искать игроков", "🔍 Find players"]))
+@dp.message(F.text.in_(["🔍 Искать игроков"]))
 async def search_players(msg: types.Message):
     user_id = msg.from_user.id
     if not check_rate_limit(user_id):
@@ -661,7 +666,7 @@ async def toggle_favorite(call: types.CallbackQuery):
             await call.answer("✅ Добавлено в избранное")
         conn.commit()
 
-@dp.message(F.text.in_(["⭐ Избранное", "⭐ Favorites"]))
+@dp.message(F.text.in_(["⭐ Избранное"]))
 async def show_favorites(msg: types.Message):
     user_id = msg.from_user.id
     with get_db() as conn:
@@ -684,7 +689,7 @@ async def show_favorites(msg: types.Message):
     await msg.answer(text)
 
 # ================== SWIPE ==================
-@dp.message(F.text.in_(["💕 Свайп", "💕 Swipe"]))
+@dp.message(F.text.in_(["💕 Свайп"]))
 async def swipe_start(msg: types.Message):
     user_id = msg.from_user.id
     if not check_rate_limit(user_id):
@@ -704,7 +709,6 @@ async def swipe_start(msg: types.Message):
         r = cur.fetchone()
 
     if not r:
-        # Сбрасываем историю свайпов
         with get_db() as conn:
             cur = conn.cursor()
             cur.execute("DELETE FROM swipes WHERE user_id = ?", (user_id,))
@@ -763,11 +767,9 @@ async def handle_swipe(call: types.CallbackQuery):
         await call.message.delete()
     except Exception:
         pass
-    # Можно сразу показать следующую анкету
-    # await swipe_start(call.message)
 
-# ================== CLANS (базово) ==================
-@dp.message(F.text.in_(["🏰 Создать клан", "🏰 Create clan"]))
+# ================== CLANS ==================
+@dp.message(F.text.in_(["🏰 Создать клан"]))
 async def create_clan_start(msg: types.Message):
     user_id = msg.from_user.id
     with get_db() as conn:
@@ -829,11 +831,11 @@ async def clan_server(msg: types.Message):
     await msg.answer(
         f"✅ Клан создан!\n\n🏷️ {data['name']} [{data['tag']}]\n"
         f"📝 {data['desc']}\n🌐 {data['server']}",
-        reply_markup=main_menu(get_lang(user_id))
+        reply_markup=main_menu()
     )
     clan_data.pop(user_id, None)
 
-@dp.message(F.text.in_(["🏰 Мои кланы", "🏰 My clans"]))
+@dp.message(F.text.in_(["🏰 Мои кланы"]))
 async def my_clans(msg: types.Message):
     user_id = msg.from_user.id
     with get_db() as conn:
@@ -856,7 +858,7 @@ async def my_clans(msg: types.Message):
     await msg.answer(text)
 
 # ================== STATS ==================
-@dp.message(F.text.in_(["📊 Статистика", "📊 Total players", "📊 Всего игроков"]))
+@dp.message(F.text.in_(["📊 Статистика"]))
 async def stats(msg: types.Message):
     with get_db() as conn:
         cur = conn.cursor()
@@ -886,10 +888,9 @@ async def report_reason(msg: types.Message):
         )
         conn.commit()
 
-    await msg.answer("📩 Жалоба отправлена модераторам")
+    await msg.answer("📩 Жалоба отправлена")
     report_data.pop(user_id, None)
 
-    # Уведомление админам
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -1025,7 +1026,7 @@ async def cmd_resolve(msg: types.Message):
 # ================== MAIN ==================
 async def main():
     os.makedirs("avatars", exist_ok=True)
-    print("🤖 Rust LFG Bot v8.5 запущен")
+    print("🤖 Rust LFG Bot v8.6 запущен")
     print(f"👑 Owner ID: {OWNER_ID}")
     await dp.start_polling(bot)
 
