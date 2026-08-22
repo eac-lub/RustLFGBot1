@@ -1,4 +1,4 @@
-# ===== RUST LFG BOT v11.0 (Full: RU/EN + Referral + Anti-bot + Admin) =====
+# ===== RUST LFG BOT v11.1 (Fixed flow) =====
 import os
 import asyncio
 import sqlite3
@@ -167,7 +167,7 @@ def init_db():
                 microphone TEXT DEFAULT 'Нет',
                 timezone TEXT DEFAULT 'МСК+3',
                 date TEXT,
-                language TEXT DEFAULT 'ru',
+                language TEXT,
                 active INTEGER DEFAULT 1,
                 referrer_id INTEGER,
                 points REAL DEFAULT 0,
@@ -175,12 +175,12 @@ def init_db():
                 anti_bot_passed INTEGER DEFAULT 0
             )
         ''')
-        # Миграции
         for col, typ in [
             ("referrer_id", "INTEGER"),
             ("points", "REAL DEFAULT 0"),
             ("referral_code", "TEXT UNIQUE"),
-            ("anti_bot_passed", "INTEGER DEFAULT 0")
+            ("anti_bot_passed", "INTEGER DEFAULT 0"),
+            ("language", "TEXT")
         ]:
             try:
                 cur.execute(f"ALTER TABLE profiles ADD COLUMN {col} {typ}")
@@ -321,6 +321,7 @@ def add_referral(referrer_id: int, referred_id: int):
         conn.commit()
 
 def verify_referral_and_give_points(referred_id: int):
+    """Баллы даются ТОЛЬКО после создания анкеты"""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT referrer_id, verified FROM referrals WHERE referred_id = ?", (referred_id,))
@@ -380,9 +381,10 @@ def lang_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True
     )
 
-def anti_bot_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+def anti_bot_keyboard(lang: str) -> ReplyKeyboardMarkup:
+    btn = TEXTS[lang]["anti_bot_btn"]
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=t(user_id, "anti_bot_btn"))]],
+        keyboard=[[KeyboardButton(text=btn)]],
         resize_keyboard=True
     )
 
@@ -411,7 +413,7 @@ class BanCheckMiddleware(BaseMiddleware):
 dp.message.middleware(BanCheckMiddleware())
 dp.callback_query.middleware(BanCheckMiddleware())
 
-# ================== START + LANGUAGE + ANTI-BOT ==================
+# ================== START → LANGUAGE → ANTI-BOT ==================
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
     user_id = msg.from_user.id
@@ -426,7 +428,7 @@ async def cmd_start(msg: types.Message):
         )
         conn.commit()
 
-        # Записываем потенциального реферера (пока не verified)
+        # Записываем реферера (пока verified = 0)
         if ref_code:
             cur.execute("SELECT user_id FROM profiles WHERE referral_code = ?", (ref_code,))
             row = cur.fetchone()
@@ -442,26 +444,27 @@ async def cmd_start(msg: types.Message):
         lang = row["language"] if row else None
         anti_passed = row["anti_bot_passed"] if row else 0
 
-    # 1. Сначала выбор языка
+    # === 1. ВСЕГДА сначала язык ===
     if not lang or lang not in ("ru", "en"):
         user_data[user_id] = {"step": "choose_lang"}
         await msg.answer(TEXTS["ru"]["choose_lang"], reply_markup=lang_keyboard())
         return
 
-    # 2. Потом антибот
+    # === 2. Потом антибот ===
     if not anti_passed:
         user_data[user_id] = {"step": "anti_bot"}
-        await msg.answer(t(user_id, "anti_bot"), reply_markup=anti_bot_keyboard(user_id))
+        await msg.answer(TEXTS[lang]["anti_bot"], reply_markup=anti_bot_keyboard(lang))
         return
 
-    # 3. Всё ок → меню
+    # === 3. Всё пройдено ===
     await msg.answer(t(user_id, "start"), reply_markup=main_menu(user_id), parse_mode="HTML")
 
 @dp.message(F.text.in_(["🇷🇺 Русский", "🇬🇧 English"]))
 async def set_language(msg: types.Message):
     user_id = msg.from_user.id
     if user_id not in user_data or user_data[user_id].get("step") != "choose_lang":
-        return
+        # Если человек просто нажал кнопку языка вне сценария — всё равно ставим
+        pass
 
     lang = "ru" if "Русский" in msg.text else "en"
     with get_db() as conn:
@@ -471,14 +474,12 @@ async def set_language(msg: types.Message):
 
     user_data[user_id] = {"step": "anti_bot"}
     await msg.answer(TEXTS[lang]["lang_set"])
-    await msg.answer(t(user_id, "anti_bot"), reply_markup=anti_bot_keyboard(user_id))
+    await msg.answer(TEXTS[lang]["anti_bot"], reply_markup=anti_bot_keyboard(lang))
 
 @dp.message(F.text.in_([TEXTS["ru"]["anti_bot_btn"], TEXTS["en"]["anti_bot_btn"]]))
 async def anti_bot_passed(msg: types.Message):
     user_id = msg.from_user.id
-    if user_id not in user_data or user_data[user_id].get("step") != "anti_bot":
-        return
-
+    # Разрешаем даже если step не совпал (на случай старых данных)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE profiles SET anti_bot_passed = 1 WHERE user_id = ?", (user_id,))
@@ -499,7 +500,7 @@ async def change_lang(msg: types.Message):
     user_data[msg.from_user.id] = {"step": "choose_lang"}
     await msg.answer(TEXTS["ru"]["choose_lang"], reply_markup=lang_keyboard())
 
-# ================== REFERRAL LINK ==================
+# ================== REFERRAL ==================
 @dp.message(F.text.in_([TEXTS["ru"]["m_ref"], TEXTS["en"]["m_ref"]]))
 async def my_referral(msg: types.Message):
     user_id = msg.from_user.id
@@ -622,7 +623,7 @@ async def profile_looking(msg: types.Message):
             kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Newbie"), KeyboardButton(text="Average")], [KeyboardButton(text="Experienced"), KeyboardButton(text="Very experienced")]], resize_keyboard=True)
             await msg.answer("🎯 <b>Just play</b>\n\nYour level?", reply_markup=kb, parse_mode="HTML")
 
-# ===== PATH 1: Teammate =====
+# ===== PATHS (сокращённо, но полностью рабочие) =====
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_experience")
 async def tm_experience(msg: types.Message):
     user_id = msg.from_user.id
@@ -703,14 +704,13 @@ async def tm_extra(msg: types.Message):
         extra = "—"
     data = user_data[user_id]
     lang = get_lang(user_id)
-    if lang == "ru":
-        desc = f"Опыт: {data.get('experience')}\nРоль: {data.get('role')}\nСтиль: {data.get('style')}\nСостав: {data.get('size')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
-    else:
-        desc = f"Experience: {data.get('experience')}\nRole: {data.get('role')}\nStyle: {data.get('style')}\nGroup: {data.get('size')}\nOnline: {data.get('online')}\nExtra: {extra}"
+    desc = (f"Опыт: {data.get('experience')}\nРоль: {data.get('role')}\nСтиль: {data.get('style')}\nСостав: {data.get('size')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
+            if lang == "ru" else
+            f"Experience: {data.get('experience')}\nRole: {data.get('role')}\nStyle: {data.get('style')}\nGroup: {data.get('size')}\nOnline: {data.get('online')}\nExtra: {extra}")
     user_data[user_id]["description"] = desc
     await save_profile(msg)
 
-# ===== PATH 2: Looking clan =====
+# PATH 2
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_experience")
 async def lc_experience(msg: types.Message):
     user_id = msg.from_user.id
@@ -759,14 +759,13 @@ async def lc_extra(msg: types.Message):
         extra = "—"
     data = user_data[user_id]
     lang = get_lang(user_id)
-    if lang == "ru":
-        desc = f"Опыт: {data.get('experience')}\nЖелаемая роль: {data.get('role')}\nРазмер клана: {data.get('clan_size')}\nСервер: {data.get('server')}\nДополнительно: {extra}"
-    else:
-        desc = f"Experience: {data.get('experience')}\nDesired role: {data.get('role')}\nClan size: {data.get('clan_size')}\nServer: {data.get('server')}\nExtra: {extra}"
+    desc = (f"Опыт: {data.get('experience')}\nЖелаемая роль: {data.get('role')}\nРазмер клана: {data.get('clan_size')}\nСервер: {data.get('server')}\nДополнительно: {extra}"
+            if lang == "ru" else
+            f"Experience: {data.get('experience')}\nDesired role: {data.get('role')}\nClan size: {data.get('clan_size')}\nServer: {data.get('server')}\nExtra: {extra}")
     user_data[user_id]["description"] = desc
     await save_profile(msg)
 
-# ===== PATH 3: Recruiting =====
+# PATH 3
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_name")
 async def rec_name(msg: types.Message):
     user_id = msg.from_user.id
@@ -782,14 +781,14 @@ async def rec_members(msg: types.Message):
     user_id = msg.from_user.id
     user_data[user_id]["members"] = msg.text.strip()
     user_data[user_id]["step"] = "rec_server"
-    await msg.answer("Сервер / тип серверов?" if get_lang(user_id) == "ru" else "Server / type?")
+    await msg.answer("Сервер / тип?" if get_lang(user_id) == "ru" else "Server / type?")
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_server")
 async def rec_server(msg: types.Message):
     user_id = msg.from_user.id
     user_data[user_id]["server"] = msg.text.strip()
     user_data[user_id]["step"] = "rec_req"
-    await msg.answer("Требования к игрокам?" if get_lang(user_id) == "ru" else "Requirements?")
+    await msg.answer("Требования?" if get_lang(user_id) == "ru" else "Requirements?")
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_req")
 async def rec_req(msg: types.Message):
@@ -806,14 +805,13 @@ async def rec_extra(msg: types.Message):
         extra = "—"
     data = user_data[user_id]
     lang = get_lang(user_id)
-    if lang == "ru":
-        desc = f"Клан: {data.get('clan_name')}\nСейчас человек: {data.get('members')}\nСервер: {data.get('server')}\nТребования: {data.get('requirements')}\nДополнительно: {extra}"
-    else:
-        desc = f"Clan: {data.get('clan_name')}\nMembers: {data.get('members')}\nServer: {data.get('server')}\nRequirements: {data.get('requirements')}\nExtra: {extra}"
+    desc = (f"Клан: {data.get('clan_name')}\nСейчас человек: {data.get('members')}\nСервер: {data.get('server')}\nТребования: {data.get('requirements')}\nДополнительно: {extra}"
+            if lang == "ru" else
+            f"Clan: {data.get('clan_name')}\nMembers: {data.get('members')}\nServer: {data.get('server')}\nRequirements: {data.get('requirements')}\nExtra: {extra}")
     user_data[user_id]["description"] = desc
     await save_profile(msg)
 
-# ===== PATH 4: Casual =====
+# PATH 4
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "cas_level")
 async def cas_level(msg: types.Message):
     user_id = msg.from_user.id
@@ -849,10 +847,9 @@ async def cas_extra(msg: types.Message):
         extra = "—"
     data = user_data[user_id]
     lang = get_lang(user_id)
-    if lang == "ru":
-        desc = f"Уровень: {data.get('level')}\nЛюбит: {data.get('like')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
-    else:
-        desc = f"Level: {data.get('level')}\nEnjoys: {data.get('like')}\nOnline: {data.get('online')}\nExtra: {extra}"
+    desc = (f"Уровень: {data.get('level')}\nЛюбит: {data.get('like')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
+            if lang == "ru" else
+            f"Level: {data.get('level')}\nEnjoys: {data.get('like')}\nOnline: {data.get('online')}\nExtra: {extra}")
     user_data[user_id]["description"] = desc
     await save_profile(msg)
 
@@ -882,7 +879,7 @@ async def save_profile(msg: types.Message):
         user_data.pop(user_id, None)
         return
 
-    # Реферал подтверждается только после создания анкеты
+    # Баллы только здесь!
     verify_referral_and_give_points(user_id)
 
     await msg.answer(
@@ -895,7 +892,7 @@ async def save_profile(msg: types.Message):
     )
     user_data.pop(user_id, None)
 
-# ================== MY PROFILE / DELETE ==================
+# ================== MY / DELETE ==================
 @dp.message(F.text.in_([TEXTS["ru"]["m_my"], TEXTS["en"]["m_my"]]))
 async def my_profile(msg: types.Message):
     user_id = msg.from_user.id
@@ -1086,7 +1083,7 @@ async def report_reason(msg: types.Message):
         except:
             pass
 
-# ================== ADMIN PANEL ==================
+# ================== ADMIN ==================
 @dp.message(Command("admin"))
 async def admin_panel(msg: types.Message):
     if not is_admin(msg.from_user.id):
@@ -1177,7 +1174,6 @@ async def admin_callbacks(call: types.CallbackQuery):
         await call.message.edit_text(text[:4000], parse_mode="HTML")
     await call.answer()
 
-# ================== ADMIN COMMANDS ==================
 @dp.message(Command("ban"))
 async def cmd_ban(msg: types.Message):
     if not is_admin(msg.from_user.id):
@@ -1220,7 +1216,7 @@ async def cmd_unban(msg: types.Message):
 # ================== MAIN ==================
 async def main():
     cleanup_old_data()
-    print("🤖 Rust LFG Bot v11.0 запущен")
+    print("🤖 Rust LFG Bot v11.1 запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
