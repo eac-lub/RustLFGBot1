@@ -1,165 +1,149 @@
-# ===== RUST LFG BOT v14.0 (Fixed + Full Admin + Mass Ready) =====
+# ===== RUST LFG BOT v11.0 (Full: RU/EN + Referral + Anti-bot + Admin) =====
 import os
-import re
-import html
 import asyncio
 import sqlite3
-import aiohttp
+import random
 from datetime import datetime
 from contextlib import contextmanager
 from dotenv import load_dotenv
-
 from aiogram import Bot, Dispatcher, types, BaseMiddleware, F
 from aiogram.filters import Command
 from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 )
-from aiogram.exceptions import TelegramRetryAfter, TelegramForbiddenError
 
 # ================== CONFIG ==================
 load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН"
+OWNER_ID = int(os.getenv("OWNER_ID") or "6276697402")
 
-TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_ТОКЕН"
-STEAM_API_KEY = os.getenv("STEAM_API_KEY")
-OWNER_ID = 6276697402
+if not TOKEN or TOKEN == "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН":
+    raise ValueError("❌ Укажи токен бота!")
+
 ADMIN_IDS = [OWNER_ID]
-
-DB_PATH = os.getenv("DB_PATH", "/data/rust_clan.db")
-RUSTYLUB_URL = "https://rustylub.github.io/Rusty.Lub/"
-
-if not TOKEN or TOKEN == "ВСТАВЬ_ТОКЕН":
-    raise ValueError("❌ Укажи BOT_TOKEN")
-
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 last_message_time = {}
-RATE_LIMIT_SECONDS = 1.5
-DAILY_SWIPE_LIMIT = 50
-REPORT_LIMIT_PER_DAY = 3
+RATE_LIMIT_SECONDS = 3
 
 # ================== TEXTS ==================
 TEXTS = {
     "ru": {
-        "start": (
-            "🦀 <b>Rust LFG Bot</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Быстро находи тиммейтов, дуо, трио или клан.\n"
-            "Создавай анкету, свайпай и находи игроков за минуты.\n\n"
-            "🔥 Полезный сайт по Rust:\n"
-            f"<a href='{RUSTYLUB_URL}'>Rusty.Lub</a>\n"
-            "• Ошибки и фиксы\n"
-            "• Бинды / FPS\n"
-            "• Калькулятор рейда\n"
-            "• Гайды\n\n"
-            "Выбери действие ниже 👇"
-        ),
-        "choose_lang": "🌐 Выбери язык:",
-        "choose_country": "🌍 Выбери страну:",
-        "lang_set": "✅ Язык сохранён",
-        "country_set": "✅ Страна сохранена",
+        "start": "🦀 <b>Rust LFG Bot</b>\n\nБыстро находи тиммейтов, клан или набирай людей.\n\nВыбери действие:",
+        "choose_lang": "🌐 Choose language / Выберите язык:",
+        "lang_set": "✅ Язык установлен: Русский",
+        "anti_bot": "Для продолжения подтверди, что ты не робот:",
+        "anti_bot_btn": "🤖 Я не робот",
         "cancel": "✅ Отменено",
-        "already_has": "У тебя уже есть активная анкета.",
+        "already_has": "У тебя уже есть активная анкета. Сначала удали её.",
+        "age": "🎂 Укажи возраст:",
+        "age_custom": "Напиши возраст цифрами (14–60):",
+        "age_error": "Напиши число от 14 до 60",
+        "mic": "🎤 Микрофон:",
+        "tz": "🕐 Напиши часовой пояс\nПримеры: <code>МСК+3</code>, <code>UTC+3</code>",
+        "tz_error": "Напиши часовой пояс нормально",
+        "looking": "🎯 Что ты ищешь?",
+        "choose_btn": "Выбери кнопкой",
+        "created": "✅ <b>Анкета создана!</b>",
+        "my_profile": "👤 <b>Твоя анкета</b>",
         "no_profile": "У тебя пока нет анкеты.",
+        "delete_q": "Точно удалить анкету?",
+        "deleted": "✅ Анкета удалена",
+        "cancelled": "Отменено",
         "wait": "⏳ Подожди немного",
-        "no_profiles": "Пока нет активных анкет.",
+        "no_profiles": "Пока нет активных анкет на твоём языке.",
         "shown": "Показано {} из {}",
         "fav_empty": "Избранных пока нет",
-        "swipe_limit": "Дневной лимит свайпов. Завтра снова!",
+        "fav_title": "⭐ <b>Избранное:</b>\n\n",
         "swipe_restart": "Анкеты закончились, начинаю заново",
-        "mutual": "💕 <b>Новый мэтч!</b>\nВзаимный интерес с @{}",
-        "report_ask": "Опиши причину жалобы:",
+        "mutual": "💕 Взаимный интерес!\nНапиши: @{}",
+        "stats": "📊 Активных анкет: <b>{}</b>",
+        "report_ask": "Кратко опиши причину жалобы:",
         "report_sent": "Жалоба отправлена",
-        "report_limit": "Слишком много жалоб за сутки",
         "banned": "🚫 Вы забанены.\nПричина: {}",
-        "m_create": "📝 Создать",
-        "m_search": "🔍 Поиск",
-        "m_my": "👤 Анкета",
-        "m_delete": "🗑 Удалить",
+        "ref_title": "🔗 <b>Твоя реферальная ссылка:</b>",
+        "ref_invited": "👥 Приглашено (подтверждено): <b>{}</b>",
+        "ref_points": "⭐ Баллы: <b>{}</b>",
+        "ref_info": "За каждого, кто создаст анкету по твоей ссылке — +0.5 балла",
+        "m_create": "📝 Создать анкету",
+        "m_search": "🔍 Искать игроков",
+        "m_my": "👤 Моя анкета",
+        "m_delete": "🗑 Удалить анкету",
         "m_fav": "⭐ Избранное",
         "m_swipe": "💕 Свайп",
-        "m_matches": "💞 Мэтчи",
-        "m_stats": "📊 Стата",
-        "m_check": "🕵️ Проверить",
-        "m_web": "🌐 Rusty.Lub",
+        "m_stats": "📊 Статистика",
         "m_lang": "🌐 Язык",
-        "m_country": "🌍 Страна",
-        "m_new": "🆕 Новое",
-        "rustylub": (
-            "🔥 <b>Rusty.Lub</b>\n\n"
-            "Ультимативный справочник по Rust:\n"
-            "• Ошибки и фиксы\n"
-            "• Бинды и FPS\n"
-            "• Калькулятор рейда\n"
-            "• Гайды по оружию и монументам\n\n"
-            f"👉 <a href='{RUSTYLUB_URL}'>Открыть сайт</a>"
-        ),
+        "m_ref": "🔗 Реф-ссылка",
+        "l_team": "🤝 Ищу тиммейта / дуо / трио",
+        "l_clan": "🏰 Ищу клан",
+        "l_rec": "📢 Набираю игроков в клан",
+        "l_cas": "🎯 Просто поиграть",
+        "mic_yes": "🎤 Есть микрофон",
+        "mic_no": "🔇 Нет микрофона",
+        "age_other": "Другой",
     },
     "en": {
-        "start": (
-            "🦀 <b>Rust LFG Bot</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            "Quickly find teammates, duo, trio or a clan.\n"
-            "Create a profile, swipe and meet players in minutes.\n\n"
-            "🔥 Useful Rust website:\n"
-            f"<a href='{RUSTYLUB_URL}'>Rusty.Lub</a>\n"
-            "• Error fixes\n"
-            "• Keybinds / FPS\n"
-            "• Raid calculator\n"
-            "• Guides\n\n"
-            "Choose an action below 👇"
-        ),
-        "choose_lang": "🌐 Choose language:",
-        "choose_country": "🌍 Choose country:",
-        "lang_set": "✅ Language saved",
-        "country_set": "✅ Country saved",
+        "start": "🦀 <b>Rust LFG Bot</b>\n\nQuickly find teammates, a clan or recruit players.\n\nChoose an action:",
+        "choose_lang": "🌐 Choose language / Выберите язык:",
+        "lang_set": "✅ Language set: English",
+        "anti_bot": "Please confirm you are not a robot:",
+        "anti_bot_btn": "🤖 I'm not a robot",
         "cancel": "✅ Cancelled",
-        "already_has": "You already have an active profile.",
+        "already_has": "You already have an active profile. Delete it first.",
+        "age": "🎂 Select your age:",
+        "age_custom": "Type your age (14–60):",
+        "age_error": "Type a number from 14 to 60",
+        "mic": "🎤 Microphone:",
+        "tz": "🕐 Write your timezone\nExamples: <code>UTC+3</code>, <code>MSK+3</code>",
+        "tz_error": "Write a normal timezone",
+        "looking": "🎯 What are you looking for?",
+        "choose_btn": "Please use the buttons",
+        "created": "✅ <b>Profile created!</b>",
+        "my_profile": "👤 <b>Your profile</b>",
         "no_profile": "You don't have a profile yet.",
-        "wait": "⏳ Please wait",
-        "no_profiles": "No active profiles yet.",
+        "delete_q": "Delete your profile?",
+        "deleted": "✅ Profile deleted",
+        "cancelled": "Cancelled",
+        "wait": "⏳ Please wait a moment",
+        "no_profiles": "No active profiles in your language yet.",
         "shown": "Shown {} of {}",
         "fav_empty": "No favorites yet",
-        "swipe_limit": "Daily swipe limit reached. Come back tomorrow!",
+        "fav_title": "⭐ <b>Favorites:</b>\n\n",
         "swipe_restart": "No more profiles, starting over",
-        "mutual": "💕 <b>New match!</b>\nMutual interest with @{}",
-        "report_ask": "Describe the reason:",
+        "mutual": "💕 Mutual interest!\nWrite to: @{}",
+        "stats": "📊 Active profiles: <b>{}</b>",
+        "report_ask": "Briefly describe the reason:",
         "report_sent": "Report sent",
-        "report_limit": "Too many reports today",
         "banned": "🚫 You are banned.\nReason: {}",
-        "m_create": "📝 Create",
-        "m_search": "🔍 Search",
-        "m_my": "👤 Profile",
-        "m_delete": "🗑 Delete",
+        "ref_title": "🔗 <b>Your referral link:</b>",
+        "ref_invited": "👥 Invited (verified): <b>{}</b>",
+        "ref_points": "⭐ Points: <b>{}</b>",
+        "ref_info": "+0.5 points for every user who creates a profile via your link",
+        "m_create": "📝 Create profile",
+        "m_search": "🔍 Search players",
+        "m_my": "👤 My profile",
+        "m_delete": "🗑 Delete profile",
         "m_fav": "⭐ Favorites",
         "m_swipe": "💕 Swipe",
-        "m_matches": "💞 Matches",
-        "m_stats": "📊 Stats",
-        "m_check": "🕵️ Check",
-        "m_web": "🌐 Rusty.Lub",
+        "m_stats": "📊 Statistics",
         "m_lang": "🌐 Language",
-        "m_country": "🌍 Country",
-        "m_new": "🆕 New",
-        "rustylub": (
-            "🔥 <b>Rusty.Lub</b>\n\n"
-            "Ultimate Rust handbook:\n"
-            "• Error fixes\n"
-            "• Keybinds & FPS\n"
-            "• Raid calculator\n"
-            "• Guides\n\n"
-            f"👉 <a href='{RUSTYLUB_URL}'>Open website</a>"
-        ),
+        "m_ref": "🔗 Referral",
+        "l_team": "🤝 Looking for teammate / duo / trio",
+        "l_clan": "🏰 Looking for a clan",
+        "l_rec": "📢 Recruiting for my clan",
+        "l_cas": "🎯 Just want to play",
+        "mic_yes": "🎤 Have microphone",
+        "mic_no": "🔇 No microphone",
+        "age_other": "Other",
     }
 }
 
 # ================== DATABASE ==================
 @contextmanager
 def get_db():
-    folder = os.path.dirname(DB_PATH)
-    if folder:
-        os.makedirs(folder, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=60)
+    conn = sqlite3.connect("rust_clan.db", timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -180,18 +164,29 @@ def init_db():
                 looking_for TEXT,
                 description TEXT,
                 age TEXT,
-                microphone TEXT,
-                timezone TEXT,
-                country TEXT,
-                discord TEXT,
-                steam TEXT,
-                contact_pref TEXT DEFAULT 'Telegram',
+                microphone TEXT DEFAULT 'Нет',
+                timezone TEXT DEFAULT 'МСК+3',
                 date TEXT,
                 language TEXT DEFAULT 'ru',
-                last_active TEXT,
-                active INTEGER DEFAULT 1
+                active INTEGER DEFAULT 1,
+                referrer_id INTEGER,
+                points REAL DEFAULT 0,
+                referral_code TEXT UNIQUE,
+                anti_bot_passed INTEGER DEFAULT 0
             )
         ''')
+        # Миграции
+        for col, typ in [
+            ("referrer_id", "INTEGER"),
+            ("points", "REAL DEFAULT 0"),
+            ("referral_code", "TEXT UNIQUE"),
+            ("anti_bot_passed", "INTEGER DEFAULT 0")
+        ]:
+            try:
+                cur.execute(f"ALTER TABLE profiles ADD COLUMN {col} {typ}")
+            except:
+                pass
+
         cur.execute('''
             CREATE TABLE IF NOT EXISTS favorites (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,72 +226,33 @@ def init_db():
             )
         ''')
         cur.execute('''
-            CREATE TABLE IF NOT EXISTS blacklist (
+            CREATE TABLE IF NOT EXISTS referrals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                blocked_id INTEGER,
+                referrer_id INTEGER,
+                referred_id INTEGER UNIQUE,
                 date TEXT,
-                UNIQUE(user_id, blocked_id)
+                verified INTEGER DEFAULT 0
             )
         ''')
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS matches (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user1_id INTEGER,
-                user2_id INTEGER,
-                date TEXT,
-                UNIQUE(user1_id, user2_id)
-            )
-        ''')
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS updates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT,
-                date TEXT,
-                sent_by INTEGER
-            )
-        ''')
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS ads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT,
-                active INTEGER DEFAULT 1,
-                date TEXT,
-                created_by INTEGER
-            )
-        ''')
-        cur.execute('''
-            CREATE TABLE IF NOT EXISTS admin_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id INTEGER,
-                action TEXT,
-                details TEXT,
-                date TEXT
-            )
-        ''')
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_profiles_lang ON profiles(active, language)")
+
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_profiles_active_lang ON profiles(active, language, looking_for)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_profiles_user ON profiles(user_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_profiles_referrer ON profiles(referrer_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_swipes_user ON swipes(user_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_reports_reporter ON reports(reporter_id, date)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_bans_user ON bans(user_id)")
         conn.commit()
 
 def cleanup_old_data():
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM swipes WHERE date < datetime('now', '-90 days')")
-            conn.commit()
-    except Exception as e:
-        print("Cleanup error:", e)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM swipes WHERE date < datetime('now', '-14 days')")
+        conn.commit()
 
 init_db()
 
 # ================== HELPERS ==================
-def is_admin(user_id) -> bool:
-    try:
-        return int(user_id) in ADMIN_IDS
-    except:
-        return False
-
 def get_lang(user_id: int) -> str:
     try:
         with get_db() as conn:
@@ -310,19 +266,8 @@ def get_lang(user_id: int) -> str:
     return "ru"
 
 def t(user_id: int, key: str) -> str:
-    return TEXTS.get(get_lang(user_id), TEXTS["ru"]).get(key, key)
-
-def update_last_active(user_id: int):
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "UPDATE profiles SET last_active = ? WHERE user_id = ?",
-                (datetime.now().isoformat(), user_id)
-            )
-            conn.commit()
-    except:
-        pass
+    lang = get_lang(user_id)
+    return TEXTS.get(lang, TEXTS["ru"]).get(key, TEXTS["ru"].get(key, key))
 
 def is_banned(user_id: int):
     try:
@@ -334,23 +279,8 @@ def is_banned(user_id: int):
     except:
         return None
 
-def get_daily_swipes(user_id: int) -> int:
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) as cnt FROM swipes WHERE user_id = ? AND date >= datetime('now', '-1 day')",
-            (user_id,)
-        )
-        return cur.fetchone()["cnt"]
-
-def get_daily_reports(user_id: int) -> int:
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) as cnt FROM reports WHERE reporter_id = ? AND date >= datetime('now', '-1 day')",
-            (user_id,)
-        )
-        return cur.fetchone()["cnt"]
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 def check_rate_limit(user_id: int) -> bool:
     now = datetime.now()
@@ -360,142 +290,47 @@ def check_rate_limit(user_id: int) -> bool:
     last_message_time[user_id] = now
     return True
 
-def admin_log(admin_id: int, action: str, details: str = ""):
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO admin_logs (admin_id, action, details, date) VALUES (?, ?, ?, ?)",
-                (admin_id, action, details[:500], datetime.now().isoformat())
-            )
-            conn.commit()
-    except Exception as e:
-        print("admin_log:", e)
+def generate_referral_code(user_id: int) -> str:
+    return f"ref{user_id}"
 
-def format_profile(r) -> str:
-    username = html.escape(r["username"] or "Unknown")
-    country = html.escape(r["country"] or "—")
-    looking = html.escape(r["looking_for"] or "—")
-    age = html.escape(r["age"] or "—")
-    mic = html.escape(r["microphone"] or "—")
-    tz = html.escape(r["timezone"] or "—")
-    desc = html.escape((r["description"] or "")[:220])
-    if len(r["description"] or "") > 220:
-        desc += "..."
-
-    contact = "📱 Telegram"
-    if r["contact_pref"] == "Discord" and r["discord"]:
-        contact = f"🎧 Discord: <code>{html.escape(r['discord'])}</code>"
-    elif r["contact_pref"] == "Steam" and r["steam"]:
-        contact = f"🎮 Steam: {html.escape(r['steam'])}"
-
-    return (
-        f"👤 <b>@{username}</b>\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"🎯 {looking}\n"
-        f"🎂 {age}  •  🎤 {mic}\n"
-        f"🕐 {tz}  •  🌍 {country}\n"
-        f"{contact}\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"{desc}"
-    )
-
-def get_random_ad() -> str | None:
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT text FROM ads WHERE active = 1 ORDER BY RANDOM() LIMIT 1")
-            row = cur.fetchone()
-            return row["text"] if row else None
-    except:
-        return None
-
-def get_bot_stats() -> dict:
+def get_or_create_referral_code(user_id: int) -> str:
     with get_db() as conn:
         cur = conn.cursor()
-        s = {}
-        cur.execute("SELECT COUNT(*) as c FROM profiles")
-        s["users"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM profiles WHERE active=1 AND looking_for IS NOT NULL")
-        s["profiles"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM profiles WHERE language='ru'")
-        s["ru"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM profiles WHERE language='en'")
-        s["en"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM matches")
-        s["matches"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM swipes")
-        s["swipes"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM bans")
-        s["bans"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM reports WHERE resolved=0")
-        s["reports_open"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM ads WHERE active=1")
-        s["ads"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM profiles WHERE date >= datetime('now', '-1 day')")
-        s["new_24h"] = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM profiles WHERE last_active >= datetime('now', '-1 day')")
-        s["active_24h"] = cur.fetchone()["c"]
-    return s
+        cur.execute("SELECT referral_code FROM profiles WHERE user_id = ?", (user_id,))
+        row = cur.fetchone()
+        if row and row["referral_code"]:
+            return row["referral_code"]
+        code = generate_referral_code(user_id)
+        cur.execute("UPDATE profiles SET referral_code = ? WHERE user_id = ?", (code, user_id))
+        conn.commit()
+        return code
 
-# ================== STEAM ==================
-async def resolve_steamid(text: str) -> str | None:
-    text = text.strip()
-    if re.fullmatch(r"7656119\d{10}", text):
-        return text
-    m = re.search(r"profiles/(\d{17})", text)
-    if m:
-        return m.group(1)
-    m = re.search(r"steamcommunity\.com/id/([^/\s]+)", text)
-    if m and STEAM_API_KEY:
-        vanity = m.group(1)
-        url = f"https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/?key={STEAM_API_KEY}&vanityurl={vanity}"
-        try:
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.get(url) as r:
-                    data = await r.json()
-                    if data.get("response", {}).get("success") == 1:
-                        return data["response"]["steamid"]
-        except:
-            return None
-    return None
+def add_referral(referrer_id: int, referred_id: int):
+    if referrer_id == referred_id:
+        return
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM referrals WHERE referred_id = ?", (referred_id,))
+        if cur.fetchone():
+            return
+        cur.execute(
+            "INSERT INTO referrals (referrer_id, referred_id, date, verified) VALUES (?, ?, ?, 0)",
+            (referrer_id, referred_id, datetime.now().isoformat())
+        )
+        cur.execute("UPDATE profiles SET referrer_id = ? WHERE user_id = ?", (referrer_id, referred_id))
+        conn.commit()
 
-async def get_rust_stats(steamid: str) -> dict:
-    res = {"hours": None, "kills": None, "deaths": None, "kd": None, "name": "Unknown"}
-    if not STEAM_API_KEY:
-        return res
-    timeout = aiohttp.ClientTimeout(total=12)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            url = f"https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={STEAM_API_KEY}&steamids={steamid}"
-            async with s.get(url) as r:
-                data = await r.json()
-                players = data.get("response", {}).get("players", [])
-                if players:
-                    res["name"] = players[0].get("personaname", "Unknown")
-
-            url = f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key={STEAM_API_KEY}&steamid={steamid}&include_appinfo=1&appids_filter[0]=252490"
-            async with s.get(url) as r:
-                data = await r.json()
-                games = data.get("response", {}).get("games", [])
-                if games:
-                    res["hours"] = round(games[0].get("playtime_forever", 0) / 60, 1)
-
-            url = f"https://api.steampowered.com/ISteamUserStats/GetUserStatsForGame/v2/?key={STEAM_API_KEY}&appid=252490&steamid={steamid}"
-            async with s.get(url) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    stats = {x["name"]: x["value"] for x in data.get("playerstats", {}).get("stats", [])}
-                    res["kills"] = stats.get("kill_player")
-                    res["deaths"] = stats.get("deaths")
-                    if res["kills"] is not None and res["deaths"]:
-                        res["kd"] = round(res["kills"] / res["deaths"], 2)
-                    elif res["kills"] is not None:
-                        res["kd"] = res["kills"]
-    except Exception as e:
-        print("Steam API error:", e)
-    return res
+def verify_referral_and_give_points(referred_id: int):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT referrer_id, verified FROM referrals WHERE referred_id = ?", (referred_id,))
+        row = cur.fetchone()
+        if not row or row["verified"]:
+            return
+        referrer_id = row["referrer_id"]
+        cur.execute("UPDATE referrals SET verified = 1 WHERE referred_id = ?", (referred_id,))
+        cur.execute("UPDATE profiles SET points = COALESCE(points, 0) + 0.5 WHERE user_id = ?", (referrer_id,))
+        conn.commit()
 
 # ================== KEYBOARDS ==================
 def main_menu(user_id: int) -> ReplyKeyboardMarkup:
@@ -503,79 +338,51 @@ def main_menu(user_id: int) -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=t(user_id, "m_create")), KeyboardButton(text=t(user_id, "m_search"))],
             [KeyboardButton(text=t(user_id, "m_my")), KeyboardButton(text=t(user_id, "m_delete"))],
-            [KeyboardButton(text=t(user_id, "m_swipe")), KeyboardButton(text=t(user_id, "m_matches"))],
-            [KeyboardButton(text=t(user_id, "m_fav")), KeyboardButton(text=t(user_id, "m_check"))],
-            [KeyboardButton(text=t(user_id, "m_web")), KeyboardButton(text=t(user_id, "m_stats"))],
-            [KeyboardButton(text=t(user_id, "m_lang")), KeyboardButton(text=t(user_id, "m_country")), KeyboardButton(text=t(user_id, "m_new"))]
+            [KeyboardButton(text=t(user_id, "m_fav")), KeyboardButton(text=t(user_id, "m_swipe"))],
+            [KeyboardButton(text=t(user_id, "m_stats")), KeyboardButton(text=t(user_id, "m_ref"))],
+            [KeyboardButton(text=t(user_id, "m_lang"))]
         ],
         resize_keyboard=True
     )
 
-def lang_keyboard():
+def age_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="16+"), KeyboardButton(text="18+"), KeyboardButton(text="21+")],
+            [KeyboardButton(text="25+"), KeyboardButton(text="30+"), KeyboardButton(text=t(user_id, "age_other"))]
+        ],
+        resize_keyboard=True
+    )
+
+def mic_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(user_id, "mic_yes"))],
+            [KeyboardButton(text=t(user_id, "mic_no"))]
+        ],
+        resize_keyboard=True
+    )
+
+def looking_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=t(user_id, "l_team"))],
+            [KeyboardButton(text=t(user_id, "l_clan"))],
+            [KeyboardButton(text=t(user_id, "l_rec"))],
+            [KeyboardButton(text=t(user_id, "l_cas"))]
+        ],
+        resize_keyboard=True
+    )
+
+def lang_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🇷🇺 Русский"), KeyboardButton(text="🇬🇧 English")]],
         resize_keyboard=True
     )
 
-def country_keyboard():
+def anti_bot_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🇷🇺 Россия"), KeyboardButton(text="🇺🇦 Украина")],
-            [KeyboardButton(text="🇰🇿 Казахстан"), KeyboardButton(text="🇧🇾 Беларусь")],
-            [KeyboardButton(text="🇪🇺 Европа"), KeyboardButton(text="🇺🇸 США / Канада")],
-            [KeyboardButton(text="🌍 Другая")]
-        ],
-        resize_keyboard=True
-    )
-
-def age_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="16+"), KeyboardButton(text="18+"), KeyboardButton(text="21+")],
-            [KeyboardButton(text="25+"), KeyboardButton(text="30+"), KeyboardButton(text="Другой")]
-        ],
-        resize_keyboard=True
-    )
-
-def mic_keyboard(user_id):
-    ru = get_lang(user_id) == "ru"
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎤 Есть" if ru else "🎤 Yes")],
-            [KeyboardButton(text="🔇 Нет" if ru else "🔇 No")]
-        ],
-        resize_keyboard=True
-    )
-
-def contact_keyboard(user_id):
-    ru = get_lang(user_id) == "ru"
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📱 Telegram"), KeyboardButton(text="🎧 Discord")],
-            [KeyboardButton(text="🎮 Steam"), KeyboardButton(text="Любой" if ru else "Any")]
-        ],
-        resize_keyboard=True
-    )
-
-def looking_keyboard(user_id):
-    ru = get_lang(user_id) == "ru"
-    if ru:
-        return ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="🤝 Ищу тиммейта")],
-                [KeyboardButton(text="🏰 Ищу клан")],
-                [KeyboardButton(text="📢 Набираю в клан")],
-                [KeyboardButton(text="🎯 Просто поиграть")]
-            ],
-            resize_keyboard=True
-        )
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🤝 Looking for teammate")],
-            [KeyboardButton(text="🏰 Looking for clan")],
-            [KeyboardButton(text="📢 Recruiting")],
-            [KeyboardButton(text="🎯 Just play")]
-        ],
+        keyboard=[[KeyboardButton(text=t(user_id, "anti_bot_btn"))]],
         resize_keyboard=True
     )
 
@@ -586,12 +393,16 @@ report_data: dict[int, dict] = {}
 # ================== MIDDLEWARE ==================
 class BanCheckMiddleware(BaseMiddleware):
     async def __call__(self, handler, event, data):
-        user = getattr(event, "from_user", None)
+        user = None
+        if isinstance(event, types.Message):
+            user = event.from_user
+        elif isinstance(event, types.CallbackQuery):
+            user = event.from_user
         if user:
-            reason = is_banned(user.id)
-            if reason:
+            ban_reason = is_banned(user.id)
+            if ban_reason:
                 if isinstance(event, types.Message):
-                    await event.answer(t(user.id, "banned").format(html.escape(str(reason))))
+                    await event.answer(t(user.id, "banned").format(ban_reason))
                 else:
                     await event.answer("Banned", show_alert=True)
                 return
@@ -600,75 +411,81 @@ class BanCheckMiddleware(BaseMiddleware):
 dp.message.middleware(BanCheckMiddleware())
 dp.callback_query.middleware(BanCheckMiddleware())
 
-# ================== START ==================
+# ================== START + LANGUAGE + ANTI-BOT ==================
 @dp.message(Command("start"))
 async def cmd_start(msg: types.Message):
     user_id = msg.from_user.id
-    update_last_active(user_id)
+    args = msg.text.split(maxsplit=1)
+    ref_code = args[1] if len(args) > 1 and args[1].startswith("ref") else None
 
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "INSERT OR IGNORE INTO profiles (user_id, username, date, last_active) VALUES (?, ?, ?, ?)",
-            (user_id, msg.from_user.username or "Unknown", datetime.now().isoformat(), datetime.now().isoformat())
+            "INSERT OR IGNORE INTO profiles (user_id, username) VALUES (?, ?)",
+            (user_id, msg.from_user.username or "Unknown")
         )
         conn.commit()
-        cur.execute("SELECT language, country FROM profiles WHERE user_id = ?", (user_id,))
+
+        # Записываем потенциального реферера (пока не verified)
+        if ref_code:
+            cur.execute("SELECT user_id FROM profiles WHERE referral_code = ?", (ref_code,))
+            row = cur.fetchone()
+            if row:
+                referrer_id = row["user_id"]
+                cur.execute("SELECT referrer_id FROM profiles WHERE user_id = ?", (user_id,))
+                existing = cur.fetchone()
+                if existing and existing["referrer_id"] is None and referrer_id != user_id:
+                    add_referral(referrer_id, user_id)
+
+        cur.execute("SELECT language, anti_bot_passed FROM profiles WHERE user_id = ?", (user_id,))
         row = cur.fetchone()
+        lang = row["language"] if row else None
+        anti_passed = row["anti_bot_passed"] if row else 0
 
-    if not row or not row["language"] or row["language"] not in ("ru", "en"):
-        await msg.answer(TEXTS["ru"]["choose_lang"], reply_markup=lang_keyboard())
+    # 1. Сначала выбор языка
+    if not lang or lang not in ("ru", "en"):
         user_data[user_id] = {"step": "choose_lang"}
+        await msg.answer(TEXTS["ru"]["choose_lang"], reply_markup=lang_keyboard())
         return
 
-    if not row["country"]:
-        await msg.answer(t(user_id, "choose_country"), reply_markup=country_keyboard())
-        user_data[user_id] = {"step": "choose_country"}
+    # 2. Потом антибот
+    if not anti_passed:
+        user_data[user_id] = {"step": "anti_bot"}
+        await msg.answer(t(user_id, "anti_bot"), reply_markup=anti_bot_keyboard(user_id))
         return
 
-    await msg.answer(
-        t(user_id, "start"),
-        reply_markup=main_menu(user_id),
-        parse_mode="HTML",
-        disable_web_page_preview=False
-    )
-    ad = get_random_ad()
-    if ad:
-        await asyncio.sleep(0.25)
-        await msg.answer(f"📢 {ad}")
+    # 3. Всё ок → меню
+    await msg.answer(t(user_id, "start"), reply_markup=main_menu(user_id), parse_mode="HTML")
 
 @dp.message(F.text.in_(["🇷🇺 Русский", "🇬🇧 English"]))
 async def set_language(msg: types.Message):
     user_id = msg.from_user.id
+    if user_id not in user_data or user_data[user_id].get("step") != "choose_lang":
+        return
+
     lang = "ru" if "Русский" in msg.text else "en"
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE profiles SET language = ? WHERE user_id = ?", (lang, user_id))
         conn.commit()
-    await msg.answer(t(user_id, "lang_set"))
-    await msg.answer(t(user_id, "choose_country"), reply_markup=country_keyboard())
-    user_data[user_id] = {"step": "choose_country"}
 
-@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "choose_country")
-async def set_country(msg: types.Message):
+    user_data[user_id] = {"step": "anti_bot"}
+    await msg.answer(TEXTS[lang]["lang_set"])
+    await msg.answer(t(user_id, "anti_bot"), reply_markup=anti_bot_keyboard(user_id))
+
+@dp.message(F.text.in_([TEXTS["ru"]["anti_bot_btn"], TEXTS["en"]["anti_bot_btn"]]))
+async def anti_bot_passed(msg: types.Message):
     user_id = msg.from_user.id
-    country = msg.text.strip()
-    allowed = ["🇷🇺 Россия", "🇺🇦 Украина", "🇰🇿 Казахстан", "🇧🇾 Беларусь", "🇪🇺 Европа", "🇺🇸 США / Канада", "🌍 Другая"]
-    if country not in allowed:
-        await msg.answer("Выбери кнопкой")
+    if user_id not in user_data or user_data[user_id].get("step") != "anti_bot":
         return
+
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("UPDATE profiles SET country = ? WHERE user_id = ?", (country, user_id))
+        cur.execute("UPDATE profiles SET anti_bot_passed = 1 WHERE user_id = ?", (user_id,))
         conn.commit()
+
     user_data.pop(user_id, None)
-    await msg.answer(t(user_id, "country_set"))
-    await msg.answer(
-        t(user_id, "start"),
-        reply_markup=main_menu(user_id),
-        parse_mode="HTML",
-        disable_web_page_preview=False
-    )
+    await msg.answer(t(user_id, "start"), reply_markup=main_menu(user_id), parse_mode="HTML")
 
 @dp.message(Command("cancel"))
 async def cmd_cancel(msg: types.Message):
@@ -676,945 +493,734 @@ async def cmd_cancel(msg: types.Message):
     report_data.pop(msg.from_user.id, None)
     await msg.answer(t(msg.from_user.id, "cancel"), reply_markup=main_menu(msg.from_user.id))
 
-# ================== PROFILE CREATE ==================
-@dp.message(F.text.in_([TEXTS["ru"]["m_create"], TEXTS["en"]["m_create"]]))
-async def create_start(msg: types.Message):
+# ================== CHANGE LANGUAGE ==================
+@dp.message(F.text.in_([TEXTS["ru"]["m_lang"], TEXTS["en"]["m_lang"]]))
+async def change_lang(msg: types.Message):
+    user_data[msg.from_user.id] = {"step": "choose_lang"}
+    await msg.answer(TEXTS["ru"]["choose_lang"], reply_markup=lang_keyboard())
+
+# ================== REFERRAL LINK ==================
+@dp.message(F.text.in_([TEXTS["ru"]["m_ref"], TEXTS["en"]["m_ref"]]))
+async def my_referral(msg: types.Message):
     user_id = msg.from_user.id
-    update_last_active(user_id)
+    code = get_or_create_referral_code(user_id)
+    link = f"https://t.me/RustLFGBot?start={code}"
+
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM profiles WHERE user_id=? AND active=1 AND looking_for IS NOT NULL", (user_id,))
+        cur.execute("SELECT COALESCE(points, 0) as points FROM profiles WHERE user_id = ?", (user_id,))
+        points = cur.fetchone()["points"]
+        cur.execute("SELECT COUNT(*) as cnt FROM referrals WHERE referrer_id = ? AND verified = 1", (user_id,))
+        invited = cur.fetchone()["cnt"]
+
+    text = (
+        f"{t(user_id, 'ref_title')}\n<code>{link}</code>\n\n"
+        f"{t(user_id, 'ref_invited').format(invited)}\n"
+        f"{t(user_id, 'ref_points').format(points)}\n\n"
+        f"{t(user_id, 'ref_info')}"
+    )
+    await msg.answer(text, parse_mode="HTML")
+
+# ================== PROFILE CREATION ==================
+@dp.message(F.text.in_([TEXTS["ru"]["m_create"], TEXTS["en"]["m_create"]]))
+async def create_profile_start(msg: types.Message):
+    user_id = msg.from_user.id
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM profiles WHERE user_id = ? AND active = 1 AND looking_for IS NOT NULL", (user_id,))
         if cur.fetchone():
             await msg.answer(t(user_id, "already_has"))
             return
     user_data[user_id] = {"step": "age"}
-    await msg.answer("🎂 Возраст / Age:", reply_markup=age_keyboard())
+    await msg.answer(t(user_id, "age"), reply_markup=age_keyboard(user_id))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "age")
-async def p_age(msg: types.Message):
+async def profile_age(msg: types.Message):
     user_id = msg.from_user.id
     text = msg.text.strip()
-    if text == "Другой":
+    other = t(user_id, "age_other")
+    if text == other:
         user_data[user_id]["step"] = "age_custom"
-        await msg.answer("Напиши возраст (14-60):", reply_markup=ReplyKeyboardRemove())
+        await msg.answer(t(user_id, "age_custom"), reply_markup=ReplyKeyboardRemove())
         return
     if text not in ["16+", "18+", "21+", "25+", "30+"]:
-        await msg.answer("Выбери кнопкой")
+        await msg.answer(t(user_id, "choose_btn"))
         return
     user_data[user_id]["age"] = text
     user_data[user_id]["step"] = "mic"
-    await msg.answer("🎤 Микрофон:", reply_markup=mic_keyboard(user_id))
+    await msg.answer(t(user_id, "mic"), reply_markup=mic_keyboard(user_id))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "age_custom")
-async def p_age_c(msg: types.Message):
+async def profile_age_custom(msg: types.Message):
     user_id = msg.from_user.id
-    if not msg.text.isdigit() or not (14 <= int(msg.text) <= 60):
-        await msg.answer("Число от 14 до 60")
+    age = msg.text.strip()
+    if not age.isdigit() or not (14 <= int(age) <= 60):
+        await msg.answer(t(user_id, "age_error"))
         return
-    user_data[user_id]["age"] = msg.text
+    user_data[user_id]["age"] = age
     user_data[user_id]["step"] = "mic"
-    await msg.answer("🎤 Микрофон:", reply_markup=mic_keyboard(user_id))
+    await msg.answer(t(user_id, "mic"), reply_markup=mic_keyboard(user_id))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "mic")
-async def p_mic(msg: types.Message):
+async def profile_mic(msg: types.Message):
     user_id = msg.from_user.id
-    user_data[user_id]["mic"] = "Есть" if ("Есть" in msg.text or "Yes" in msg.text) else "Нет"
+    yes = t(user_id, "mic_yes")
+    no = t(user_id, "mic_no")
+    if msg.text not in [yes, no]:
+        await msg.answer(t(user_id, "choose_btn"))
+        return
+    user_data[user_id]["mic"] = "Есть" if msg.text == yes else "Нет"
     user_data[user_id]["step"] = "tz"
-    await msg.answer("🕐 Часовой пояс (МСК+3 / UTC+3):", reply_markup=ReplyKeyboardRemove())
+    await msg.answer(t(user_id, "tz"), reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tz")
-async def p_tz(msg: types.Message):
+async def profile_tz(msg: types.Message):
     user_id = msg.from_user.id
-    if len(msg.text.strip()) < 2:
-        await msg.answer("Напиши нормально")
+    tz = msg.text.strip()
+    if len(tz) < 2 or len(tz) > 30:
+        await msg.answer(t(user_id, "tz_error"))
         return
-    user_data[user_id]["tz"] = msg.text.strip()[:40]
-    user_data[user_id]["step"] = "contact"
-    await msg.answer("📞 Как связываться?", reply_markup=contact_keyboard(user_id))
-
-@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "contact")
-async def p_contact(msg: types.Message):
-    user_id = msg.from_user.id
-    text = msg.text
-    if "Discord" in text:
-        user_data[user_id]["contact_pref"] = "Discord"
-        user_data[user_id]["step"] = "discord"
-        await msg.answer("Введи Discord:", reply_markup=ReplyKeyboardRemove())
-    elif "Steam" in text:
-        user_data[user_id]["contact_pref"] = "Steam"
-        user_data[user_id]["step"] = "steam"
-        await msg.answer("Введи Steam / ссылку:", reply_markup=ReplyKeyboardRemove())
-    else:
-        user_data[user_id]["contact_pref"] = "Telegram"
-        user_data[user_id]["discord"] = None
-        user_data[user_id]["steam"] = None
-        user_data[user_id]["step"] = "looking"
-        await msg.answer("🎯 Что ищешь?", reply_markup=looking_keyboard(user_id))
-
-@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "discord")
-async def p_discord(msg: types.Message):
-    user_id = msg.from_user.id
-    user_data[user_id]["discord"] = msg.text.strip()[:60]
-    user_data[user_id]["steam"] = None
+    user_data[user_id]["tz"] = tz
     user_data[user_id]["step"] = "looking"
-    await msg.answer("🎯 Что ищешь?", reply_markup=looking_keyboard(user_id))
-
-@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "steam")
-async def p_steam(msg: types.Message):
-    user_id = msg.from_user.id
-    user_data[user_id]["steam"] = msg.text.strip()[:120]
-    user_data[user_id]["discord"] = None
-    user_data[user_id]["step"] = "looking"
-    await msg.answer("🎯 Что ищешь?", reply_markup=looking_keyboard(user_id))
+    await msg.answer(t(user_id, "looking"), reply_markup=looking_keyboard(user_id))
 
 @dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "looking")
-async def p_looking(msg: types.Message):
+async def profile_looking(msg: types.Message):
     user_id = msg.from_user.id
-    user_data[user_id]["looking"] = msg.text[:80]
-    user_data[user_id]["step"] = "desc"
-    await msg.answer("📝 Коротко о себе:", reply_markup=ReplyKeyboardRemove())
-
-@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "desc")
-async def p_desc(msg: types.Message):
-    user_id = msg.from_user.id
-    if len(msg.text.strip()) < 8:
-        await msg.answer("Слишком коротко (мин. 8 символов)")
+    choice = msg.text
+    mapping = {
+        t(user_id, "l_team"): "teammate",
+        t(user_id, "l_clan"): "looking_clan",
+        t(user_id, "l_rec"): "recruiting",
+        t(user_id, "l_cas"): "casual"
+    }
+    if choice not in mapping:
+        await msg.answer(t(user_id, "choose_btn"))
         return
-    data = user_data[user_id]
-    data["description"] = msg.text.strip()[:700]
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM profiles WHERE user_id=?", (user_id,))
-        exists = cur.fetchone()
-        if exists:
-            cur.execute('''
-                UPDATE profiles SET
-                    username=?, looking_for=?, description=?, age=?, microphone=?, timezone=?,
-                    discord=?, steam=?, contact_pref=?, date=?, language=?, last_active=?, active=1
-                WHERE user_id=?
-            ''', (
-                msg.from_user.username or "Unknown", data.get("looking"), data.get("description"),
-                data.get("age"), data.get("mic"), data.get("tz"), data.get("discord"), data.get("steam"),
-                data.get("contact_pref", "Telegram"), datetime.now().isoformat(), get_lang(user_id),
-                datetime.now().isoformat(), user_id
-            ))
+    user_data[user_id]["looking"] = choice
+    path = mapping[choice]
+    lang = get_lang(user_id)
+
+    if path == "teammate":
+        user_data[user_id]["step"] = "tm_experience"
+        text = "⚔️ <b>Ищешь тиммейта</b>\n\nСколько примерно часов / вайпов?" if lang == "ru" else "⚔️ <b>Looking for teammate</b>\n\nHow many hours / wipes?"
+        await msg.answer(text, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
+    elif path == "looking_clan":
+        user_data[user_id]["step"] = "lc_experience"
+        text = "🏰 <b>Ищешь клан</b>\n\nСколько примерно часов / вайпов?" if lang == "ru" else "🏰 <b>Looking for a clan</b>\n\nHow many hours / wipes?"
+        await msg.answer(text, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
+    elif path == "recruiting":
+        user_data[user_id]["step"] = "rec_name"
+        text = "📢 <b>Набираешь в клан</b>\n\nНапиши название клана:" if lang == "ru" else "📢 <b>Recruiting</b>\n\nWrite clan name:"
+        await msg.answer(text, reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
+    elif path == "casual":
+        user_data[user_id]["step"] = "cas_level"
+        if lang == "ru":
+            kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Новичок"), KeyboardButton(text="Средний")], [KeyboardButton(text="Опытный"), KeyboardButton(text="Очень опытный")]], resize_keyboard=True)
+            await msg.answer("🎯 <b>Просто поиграть</b>\n\nКакой уровень?", reply_markup=kb, parse_mode="HTML")
         else:
+            kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Newbie"), KeyboardButton(text="Average")], [KeyboardButton(text="Experienced"), KeyboardButton(text="Very experienced")]], resize_keyboard=True)
+            await msg.answer("🎯 <b>Just play</b>\n\nYour level?", reply_markup=kb, parse_mode="HTML")
+
+# ===== PATH 1: Teammate =====
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_experience")
+async def tm_experience(msg: types.Message):
+    user_id = msg.from_user.id
+    if len(msg.text.strip()) < 2:
+        await msg.answer("Напиши хотя бы примерно" if get_lang(user_id) == "ru" else "Write something")
+        return
+    user_data[user_id]["experience"] = msg.text.strip()
+    user_data[user_id]["step"] = "tm_role"
+    lang = get_lang(user_id)
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Builder"), KeyboardButton(text="PvP / Fighter")],
+        [KeyboardButton(text="Farmer / Gatherer"), KeyboardButton(text="All-rounder")],
+        [KeyboardButton(text="Другое" if lang == "ru" else "Other")]
+    ], resize_keyboard=True)
+    await msg.answer("Какая основная роль?" if lang == "ru" else "Main role?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_role")
+async def tm_role(msg: types.Message):
+    user_id = msg.from_user.id
+    role = msg.text.strip()
+    if role in ["Другое", "Other"]:
+        user_data[user_id]["step"] = "tm_role_custom"
+        await msg.answer("Напиши роль:" if get_lang(user_id) == "ru" else "Write role:", reply_markup=ReplyKeyboardRemove())
+        return
+    user_data[user_id]["role"] = role
+    user_data[user_id]["step"] = "tm_style"
+    await ask_style(msg)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_role_custom")
+async def tm_role_custom(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["role"] = msg.text.strip()
+    user_data[user_id]["step"] = "tm_style"
+    await ask_style(msg)
+
+async def ask_style(msg: types.Message):
+    user_id = msg.from_user.id
+    lang = get_lang(user_id)
+    if lang == "ru":
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Агрессивный"), KeyboardButton(text="Спокойный")], [KeyboardButton(text="Смешанный")]], resize_keyboard=True)
+        await msg.answer("Стиль игры?", reply_markup=kb)
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Aggressive"), KeyboardButton(text="Chill")], [KeyboardButton(text="Mixed")]], resize_keyboard=True)
+        await msg.answer("Playstyle?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_style")
+async def tm_style(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["style"] = msg.text.strip()
+    user_data[user_id]["step"] = "tm_size"
+    lang = get_lang(user_id)
+    if lang == "ru":
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Дуо"), KeyboardButton(text="Трио")], [KeyboardButton(text="4-5 человек"), KeyboardButton(text="Любой размер")]], resize_keyboard=True)
+        await msg.answer("Состав?", reply_markup=kb)
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Duo"), KeyboardButton(text="Trio")], [KeyboardButton(text="4-5 players"), KeyboardButton(text="Any size")]], resize_keyboard=True)
+        await msg.answer("Group size?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_size")
+async def tm_size(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["size"] = msg.text.strip()
+    user_data[user_id]["step"] = "tm_time"
+    await msg.answer("Когда обычно играешь?" if get_lang(user_id) == "ru" else "When do you play?", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_time")
+async def tm_time(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["online"] = msg.text.strip()
+    user_data[user_id]["step"] = "tm_extra"
+    await msg.answer("Есть что добавить? (можно «нет»)" if get_lang(user_id) == "ru" else "Anything to add? (or «no»)")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "tm_extra")
+async def tm_extra(msg: types.Message):
+    user_id = msg.from_user.id
+    extra = msg.text.strip()
+    if extra.lower() in ["нет", "no", "-", ""]:
+        extra = "—"
+    data = user_data[user_id]
+    lang = get_lang(user_id)
+    if lang == "ru":
+        desc = f"Опыт: {data.get('experience')}\nРоль: {data.get('role')}\nСтиль: {data.get('style')}\nСостав: {data.get('size')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
+    else:
+        desc = f"Experience: {data.get('experience')}\nRole: {data.get('role')}\nStyle: {data.get('style')}\nGroup: {data.get('size')}\nOnline: {data.get('online')}\nExtra: {extra}"
+    user_data[user_id]["description"] = desc
+    await save_profile(msg)
+
+# ===== PATH 2: Looking clan =====
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_experience")
+async def lc_experience(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["experience"] = msg.text.strip()
+    user_data[user_id]["step"] = "lc_role"
+    lang = get_lang(user_id)
+    kb = ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="Builder"), KeyboardButton(text="PvP")],
+        [KeyboardButton(text="Farmer"), KeyboardButton(text="All-rounder")],
+        [KeyboardButton(text="Любая роль" if lang == "ru" else "Any role")]
+    ], resize_keyboard=True)
+    await msg.answer("Какую роль хочешь?" if lang == "ru" else "Desired role?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_role")
+async def lc_role(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["role"] = msg.text.strip()
+    user_data[user_id]["step"] = "lc_size"
+    lang = get_lang(user_id)
+    if lang == "ru":
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Маленький (до 8)"), KeyboardButton(text="Средний (8-15)")], [KeyboardButton(text="Большой (15+)"), KeyboardButton(text="Не важно")]], resize_keyboard=True)
+        await msg.answer("Размер клана?", reply_markup=kb)
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Small (≤8)"), KeyboardButton(text="Medium (8-15)")], [KeyboardButton(text="Large (15+)"), KeyboardButton(text="Any")]], resize_keyboard=True)
+        await msg.answer("Clan size?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_size")
+async def lc_size(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["clan_size"] = msg.text.strip()
+    user_data[user_id]["step"] = "lc_server"
+    await msg.answer("Тип серверов?" if get_lang(user_id) == "ru" else "Server type?", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_server")
+async def lc_server(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["server"] = msg.text.strip()
+    user_data[user_id]["step"] = "lc_extra"
+    await msg.answer("Что ещё важно? (можно «нет»)" if get_lang(user_id) == "ru" else "Anything else? (or «no»)")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "lc_extra")
+async def lc_extra(msg: types.Message):
+    user_id = msg.from_user.id
+    extra = msg.text.strip()
+    if extra.lower() in ["нет", "no", "-", ""]:
+        extra = "—"
+    data = user_data[user_id]
+    lang = get_lang(user_id)
+    if lang == "ru":
+        desc = f"Опыт: {data.get('experience')}\nЖелаемая роль: {data.get('role')}\nРазмер клана: {data.get('clan_size')}\nСервер: {data.get('server')}\nДополнительно: {extra}"
+    else:
+        desc = f"Experience: {data.get('experience')}\nDesired role: {data.get('role')}\nClan size: {data.get('clan_size')}\nServer: {data.get('server')}\nExtra: {extra}"
+    user_data[user_id]["description"] = desc
+    await save_profile(msg)
+
+# ===== PATH 3: Recruiting =====
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_name")
+async def rec_name(msg: types.Message):
+    user_id = msg.from_user.id
+    if len(msg.text.strip()) < 2:
+        await msg.answer("Напиши название" if get_lang(user_id) == "ru" else "Write name")
+        return
+    user_data[user_id]["clan_name"] = msg.text.strip()
+    user_data[user_id]["step"] = "rec_members"
+    await msg.answer("Сколько человек сейчас?" if get_lang(user_id) == "ru" else "How many members now?")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_members")
+async def rec_members(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["members"] = msg.text.strip()
+    user_data[user_id]["step"] = "rec_server"
+    await msg.answer("Сервер / тип серверов?" if get_lang(user_id) == "ru" else "Server / type?")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_server")
+async def rec_server(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["server"] = msg.text.strip()
+    user_data[user_id]["step"] = "rec_req"
+    await msg.answer("Требования к игрокам?" if get_lang(user_id) == "ru" else "Requirements?")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_req")
+async def rec_req(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["requirements"] = msg.text.strip()
+    user_data[user_id]["step"] = "rec_extra"
+    await msg.answer("Есть что добавить? (можно «нет»)" if get_lang(user_id) == "ru" else "Anything to add? (or «no»)")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "rec_extra")
+async def rec_extra(msg: types.Message):
+    user_id = msg.from_user.id
+    extra = msg.text.strip()
+    if extra.lower() in ["нет", "no", "-", ""]:
+        extra = "—"
+    data = user_data[user_id]
+    lang = get_lang(user_id)
+    if lang == "ru":
+        desc = f"Клан: {data.get('clan_name')}\nСейчас человек: {data.get('members')}\nСервер: {data.get('server')}\nТребования: {data.get('requirements')}\nДополнительно: {extra}"
+    else:
+        desc = f"Clan: {data.get('clan_name')}\nMembers: {data.get('members')}\nServer: {data.get('server')}\nRequirements: {data.get('requirements')}\nExtra: {extra}"
+    user_data[user_id]["description"] = desc
+    await save_profile(msg)
+
+# ===== PATH 4: Casual =====
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "cas_level")
+async def cas_level(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["level"] = msg.text.strip()
+    user_data[user_id]["step"] = "cas_like"
+    lang = get_lang(user_id)
+    if lang == "ru":
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Фарм / строительство"), KeyboardButton(text="PvP")], [KeyboardButton(text="Всё подряд"), KeyboardButton(text="Просто почиллить")]], resize_keyboard=True)
+        await msg.answer("Что нравится?", reply_markup=kb)
+    else:
+        kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Farming / Building"), KeyboardButton(text="PvP")], [KeyboardButton(text="Everything"), KeyboardButton(text="Just chill")]], resize_keyboard=True)
+        await msg.answer("What do you enjoy?", reply_markup=kb)
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "cas_like")
+async def cas_like(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["like"] = msg.text.strip()
+    user_data[user_id]["step"] = "cas_time"
+    await msg.answer("Когда свободен?" if get_lang(user_id) == "ru" else "When are you free?", reply_markup=ReplyKeyboardRemove())
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "cas_time")
+async def cas_time(msg: types.Message):
+    user_id = msg.from_user.id
+    user_data[user_id]["online"] = msg.text.strip()
+    user_data[user_id]["step"] = "cas_extra"
+    await msg.answer("Есть что добавить? (можно «нет»)" if get_lang(user_id) == "ru" else "Anything to add? (or «no»)")
+
+@dp.message(lambda m: m.from_user.id in user_data and user_data[m.from_user.id].get("step") == "cas_extra")
+async def cas_extra(msg: types.Message):
+    user_id = msg.from_user.id
+    extra = msg.text.strip()
+    if extra.lower() in ["нет", "no", "-", ""]:
+        extra = "—"
+    data = user_data[user_id]
+    lang = get_lang(user_id)
+    if lang == "ru":
+        desc = f"Уровень: {data.get('level')}\nЛюбит: {data.get('like')}\nОнлайн: {data.get('online')}\nДополнительно: {extra}"
+    else:
+        desc = f"Level: {data.get('level')}\nEnjoys: {data.get('like')}\nOnline: {data.get('online')}\nExtra: {extra}"
+    user_data[user_id]["description"] = desc
+    await save_profile(msg)
+
+# ================== SAVE ==================
+async def save_profile(msg: types.Message):
+    user_id = msg.from_user.id
+    data = user_data.get(user_id)
+    if not data:
+        await msg.answer("Ошибка данных")
+        return
+    lang = get_lang(user_id)
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
             cur.execute('''
-                INSERT INTO profiles
-                (user_id, username, looking_for, description, age, microphone, timezone,
-                 discord, steam, contact_pref, date, language, last_active, active)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                INSERT OR REPLACE INTO profiles
+                (user_id, username, looking_for, description, age, microphone, timezone, date, language, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
             ''', (
-                user_id, msg.from_user.username or "Unknown", data.get("looking"), data.get("description"),
-                data.get("age"), data.get("mic"), data.get("tz"), data.get("discord"), data.get("steam"),
-                data.get("contact_pref", "Telegram"), datetime.now().isoformat(), get_lang(user_id),
-                datetime.now().isoformat()
+                user_id, msg.from_user.username or "Unknown", data.get("looking"),
+                data.get("description"), data.get("age"), data.get("mic"),
+                data.get("tz"), datetime.now().isoformat(), lang
             ))
-        conn.commit()
-    await msg.answer("✅ Анкета создана!", reply_markup=main_menu(user_id))
+            conn.commit()
+    except Exception as e:
+        await msg.answer(f"Error: {e}")
+        user_data.pop(user_id, None)
+        return
+
+    # Реферал подтверждается только после создания анкеты
+    verify_referral_and_give_points(user_id)
+
+    await msg.answer(
+        f"{t(user_id, 'created')}\n\n"
+        f"🎯 {data.get('looking')}\n"
+        f"🎂 {data.get('age')} | 🎤 {data.get('mic')} | 🕐 {data.get('tz')}\n\n"
+        f"📝 {data.get('description')}",
+        reply_markup=main_menu(user_id),
+        parse_mode="HTML"
+    )
     user_data.pop(user_id, None)
 
-# ================== MY / DELETE ==================
+# ================== MY PROFILE / DELETE ==================
 @dp.message(F.text.in_([TEXTS["ru"]["m_my"], TEXTS["en"]["m_my"]]))
 async def my_profile(msg: types.Message):
     user_id = msg.from_user.id
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM profiles WHERE user_id=? AND active=1", (user_id,))
+        cur.execute("SELECT looking_for, description, age, microphone, timezone FROM profiles WHERE user_id = ? AND active = 1", (user_id,))
         r = cur.fetchone()
     if not r or not r["looking_for"]:
         await msg.answer(t(user_id, "no_profile"))
         return
-    await msg.answer(format_profile(r), parse_mode="HTML")
+    await msg.answer(
+        f"{t(user_id, 'my_profile')}\n\n🎯 {r['looking_for']}\n🎂 {r['age']} | 🎤 {r['microphone']} | 🕐 {r['timezone']}\n\n📝 {r['description']}",
+        parse_mode="HTML"
+    )
 
 @dp.message(F.text.in_([TEXTS["ru"]["m_delete"], TEXTS["en"]["m_delete"]]))
-async def delete_profile(msg: types.Message):
+async def delete_profile_confirm(msg: types.Message):
+    lang = get_lang(msg.from_user.id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да", callback_data="del_yes"),
-         InlineKeyboardButton(text="❌ Нет", callback_data="del_no")]
+        [InlineKeyboardButton(text="✅ Да" if lang == "ru" else "✅ Yes", callback_data="delete_yes")],
+        [InlineKeyboardButton(text="❌ Нет" if lang == "ru" else "❌ No", callback_data="delete_no")]
     ])
-    await msg.answer("Удалить анкету?", reply_markup=kb)
+    await msg.answer(t(msg.from_user.id, "delete_q"), reply_markup=kb)
 
-@dp.callback_query(F.data.in_(["del_yes", "del_no"]))
-async def del_cb(call: types.CallbackQuery):
-    if call.data == "del_yes":
+@dp.callback_query(F.data.in_(["delete_yes", "delete_no"]))
+async def delete_profile_callback(call: types.CallbackQuery):
+    if call.data == "delete_yes":
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("UPDATE profiles SET active=0 WHERE user_id=?", (call.from_user.id,))
+            cur.execute("UPDATE profiles SET active = 0 WHERE user_id = ?", (call.from_user.id,))
             conn.commit()
-        await call.message.edit_text("✅ Удалено")
+        await call.message.edit_text(t(call.from_user.id, "deleted"))
     else:
-        await call.message.edit_text("Отменено")
+        await call.message.edit_text(t(call.from_user.id, "cancelled"))
     await call.answer()
 
 # ================== SEARCH ==================
 @dp.message(F.text.in_([TEXTS["ru"]["m_search"], TEXTS["en"]["m_search"]]))
-async def search(msg: types.Message):
+async def search_players(msg: types.Message):
     user_id = msg.from_user.id
-    update_last_active(user_id)
     if not check_rate_limit(user_id):
         await msg.answer(t(user_id, "wait"))
         return
     lang = get_lang(user_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) as c FROM profiles WHERE active=1 AND looking_for IS NOT NULL AND language=?",
-            (lang,)
-        )
-        total = cur.fetchone()["c"]
+        cur.execute("SELECT COUNT(*) as cnt FROM profiles WHERE active = 1 AND looking_for IS NOT NULL AND language = ?", (lang,))
+        total = cur.fetchone()["cnt"]
         if total == 0:
             await msg.answer(t(user_id, "no_profiles"))
             return
         cur.execute('''
-            SELECT * FROM profiles
-            WHERE active=1 AND looking_for IS NOT NULL AND language=?
-              AND user_id != ?
-              AND user_id NOT IN (SELECT blocked_id FROM blacklist WHERE user_id=?)
-            ORDER BY id DESC LIMIT 8
-        ''', (lang, user_id, user_id))
-        rows = cur.fetchall()
-    for r in rows:
+            SELECT user_id, username, looking_for, description, age, microphone, timezone
+            FROM profiles WHERE active = 1 AND looking_for IS NOT NULL AND language = ?
+            ORDER BY id DESC LIMIT 12
+        ''', (lang,))
+        results = cur.fetchall()
+    for r in results:
+        text = f"👤 @{r['username'] or 'Unknown'}\n🎯 {r['looking_for']}\n🎂 {r['age']} | 🎤 {r['microphone']} | 🕐 {r['timezone']}\n\n{(r['description'] or '')[:180]}{'...' if len(r['description'] or '') > 180 else ''}"
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Написать", url=f"tg://user?id={r['user_id']}")],
-            [
-                InlineKeyboardButton(text="⭐", callback_data=f"fav_{r['user_id']}"),
-                InlineKeyboardButton(text="🚫", callback_data=f"block_{r['user_id']}"),
-                InlineKeyboardButton(text="⚠️", callback_data=f"report_{r['user_id']}")
-            ]
+            [InlineKeyboardButton(text="💬 Написать" if lang == "ru" else "💬 Message", url=f"tg://user?id={r['user_id']}")],
+            [InlineKeyboardButton(text="⭐", callback_data=f"fav_{r['user_id']}"), InlineKeyboardButton(text="⚠️", callback_data=f"report_{r['user_id']}")]
         ])
-        await msg.answer(format_profile(r), reply_markup=kb, parse_mode="HTML")
-        await asyncio.sleep(0.08)
-    await msg.answer(t(user_id, "shown").format(len(rows), total))
+        await msg.answer(text, reply_markup=kb)
+        await asyncio.sleep(0.15)
+    await msg.answer(t(user_id, "shown").format(len(results), total))
+
+# ================== FAVORITES ==================
+@dp.callback_query(F.data.startswith("fav_"))
+async def toggle_favorite(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    target_id = int(call.data.split("_")[1])
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM favorites WHERE user_id = ? AND favorite_id = ?", (user_id, target_id))
+        if cur.fetchone():
+            cur.execute("DELETE FROM favorites WHERE user_id = ? AND favorite_id = ?", (user_id, target_id))
+            await call.answer("Убрано" if get_lang(user_id) == "ru" else "Removed")
+        else:
+            cur.execute("INSERT OR IGNORE INTO favorites (user_id, favorite_id, date) VALUES (?, ?, ?)", (user_id, target_id, datetime.now().isoformat()))
+            await call.answer("Добавлено" if get_lang(user_id) == "ru" else "Added")
+        conn.commit()
+
+@dp.message(F.text.in_([TEXTS["ru"]["m_fav"], TEXTS["en"]["m_fav"]]))
+async def show_favorites(msg: types.Message):
+    user_id = msg.from_user.id
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute('''
+            SELECT p.username, p.looking_for, p.age, p.microphone FROM favorites f
+            JOIN profiles p ON f.favorite_id = p.user_id
+            WHERE f.user_id = ? AND p.active = 1
+        ''', (user_id,))
+        rows = cur.fetchall()
+    if not rows:
+        await msg.answer(t(user_id, "fav_empty"))
+        return
+    text = t(user_id, "fav_title")
+    for r in rows:
+        text += f"@{r['username'] or 'Unknown'}\n{r['looking_for']}\n{r['age']} | {r['microphone']}\n➖\n"
+    await msg.answer(text, parse_mode="HTML")
 
 # ================== SWIPE ==================
 @dp.message(F.text.in_([TEXTS["ru"]["m_swipe"], TEXTS["en"]["m_swipe"]]))
-async def swipe(msg: types.Message):
+async def swipe_start(msg: types.Message):
     user_id = msg.from_user.id
-    update_last_active(user_id)
     if not check_rate_limit(user_id):
         await msg.answer(t(user_id, "wait"))
-        return
-    if get_daily_swipes(user_id) >= DAILY_SWIPE_LIMIT:
-        await msg.answer(t(user_id, "swipe_limit"))
         return
     lang = get_lang(user_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute('''
-            SELECT p.* FROM profiles p
-            JOIN swipes s ON s.user_id = p.user_id
-            WHERE s.target_id=? AND s.action='like' AND p.active=1 AND p.language=?
-              AND p.user_id != ?
-              AND p.user_id NOT IN (SELECT target_id FROM swipes WHERE user_id=?)
-              AND p.user_id NOT IN (SELECT blocked_id FROM blacklist WHERE user_id=?)
-            ORDER BY RANDOM() LIMIT 1
-        ''', (user_id, lang, user_id, user_id, user_id))
-        r = cur.fetchone()
-        if not r:
-            cur.execute('''
-                SELECT * FROM profiles
-                WHERE active=1 AND language=? AND looking_for IS NOT NULL
-                  AND user_id != ?
-                  AND user_id NOT IN (SELECT target_id FROM swipes WHERE user_id=?)
-                  AND user_id NOT IN (SELECT blocked_id FROM blacklist WHERE user_id=?)
-                ORDER BY RANDOM() LIMIT 1
-            ''', (lang, user_id, user_id, user_id))
-            r = cur.fetchone()
-    if not r:
+            SELECT user_id, username, looking_for, age, description, microphone, timezone
+            FROM profiles WHERE active = 1 AND looking_for IS NOT NULL AND language = ?
+              AND user_id != ? AND user_id NOT IN (SELECT target_id FROM swipes WHERE user_id = ?)
+            ORDER BY id DESC LIMIT 40
+        ''', (lang, user_id, user_id))
+        results = cur.fetchall()
+    if not results:
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("DELETE FROM swipes WHERE user_id=?", (user_id,))
+            cur.execute("DELETE FROM swipes WHERE user_id = ?", (user_id,))
             conn.commit()
         await msg.answer(t(user_id, "swipe_restart"))
-        return await swipe(msg)
-
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="❤️", callback_data=f"swipe_like_{r['user_id']}"),
-        InlineKeyboardButton(text="⛔", callback_data=f"swipe_dislike_{r['user_id']}")
-    ]])
-    await msg.answer(format_profile(r), reply_markup=kb, parse_mode="HTML")
+        return await swipe_start(msg)
+    r = random.choice(results)
+    text = f"👤 @{r['username'] or 'Unknown'}\n🎯 {r['looking_for']}\n🎂 {r['age']} | 🎤 {r['microphone']} | 🕐 {r['timezone']}\n\n{(r['description'] or '')[:150]}{'...' if len(r['description'] or '') > 150 else ''}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="❤️", callback_data=f"swipe_like_{r['user_id']}"), InlineKeyboardButton(text="⛔", callback_data=f"swipe_dislike_{r['user_id']}")]])
+    await msg.answer(text, reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("swipe_"))
-async def swipe_cb(call: types.CallbackQuery):
+async def handle_swipe(call: types.CallbackQuery):
     user_id = call.from_user.id
     parts = call.data.split("_")
-    if len(parts) < 3:
-        await call.answer()
-        return
-    action = parts[1]
-    try:
-        target = int(parts[2])
-    except:
-        await call.answer()
-        return
-
+    action, target_id = parts[1], int(parts[2])
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "INSERT OR IGNORE INTO swipes (user_id, target_id, action, date) VALUES (?,?,?,?)",
-            (user_id, target, action, datetime.now().isoformat())
-        )
+        cur.execute("INSERT OR IGNORE INTO swipes (user_id, target_id, action, date) VALUES (?, ?, ?, ?)",
+                    (user_id, target_id, action, datetime.now().isoformat()))
         conn.commit()
         if action == "like":
-            cur.execute(
-                "SELECT 1 FROM swipes WHERE user_id=? AND target_id=? AND action='like'",
-                (target, user_id)
-            )
+            cur.execute("SELECT 1 FROM swipes WHERE user_id = ? AND target_id = ? AND action = 'like'", (target_id, user_id))
             if cur.fetchone():
-                u1, u2 = min(user_id, target), max(user_id, target)
-                cur.execute(
-                    "INSERT OR IGNORE INTO matches (user1_id, user2_id, date) VALUES (?,?,?)",
-                    (u1, u2, datetime.now().isoformat())
-                )
-                conn.commit()
-                cur.execute("SELECT username FROM profiles WHERE user_id=?", (target,))
-                other = cur.fetchone()
-                name = html.escape(other["username"] if other else "Unknown")
-                await call.message.answer(t(user_id, "mutual").format(name), parse_mode="HTML")
-                try:
-                    cur.execute("SELECT username FROM profiles WHERE user_id=?", (user_id,))
-                    me = cur.fetchone()
-                    myname = html.escape(me["username"] if me else "Unknown")
-                    await bot.send_message(target, t(target, "mutual").format(myname), parse_mode="HTML")
-                except:
-                    pass
+                cur.execute("SELECT username FROM profiles WHERE user_id = ?", (target_id,))
+                row = cur.fetchone()
+                username = row["username"] if row else "Unknown"
+                await call.message.answer(t(user_id, "mutual").format(username))
     await call.answer()
     try:
         await call.message.delete()
     except:
         pass
 
-# ================== MATCHES / FAV / BLOCK / REPORT ==================
-@dp.message(F.text.in_([TEXTS["ru"]["m_matches"], TEXTS["en"]["m_matches"]]))
-async def matches(msg: types.Message):
+# ================== STATS ==================
+@dp.message(F.text.in_([TEXTS["ru"]["m_stats"], TEXTS["en"]["m_stats"]]))
+async def stats(msg: types.Message):
     user_id = msg.from_user.id
+    lang = get_lang(user_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute('''
-            SELECT CASE WHEN user1_id=? THEN user2_id ELSE user1_id END as pid
-            FROM matches WHERE user1_id=? OR user2_id=?
-            ORDER BY date DESC LIMIT 15
-        ''', (user_id, user_id, user_id))
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Мэтчей пока нет")
-        return
-    for row in rows:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT * FROM profiles WHERE user_id=?", (row["pid"],))
-            p = cur.fetchone()
-        if p and p["active"]:
-            kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💬", url=f"tg://user?id={p['user_id']}")]
-            ])
-            await msg.answer(format_profile(p), reply_markup=kb, parse_mode="HTML")
-            await asyncio.sleep(0.08)
+        cur.execute("SELECT COUNT(*) as cnt FROM profiles WHERE active = 1 AND looking_for IS NOT NULL AND language = ?", (lang,))
+        count = cur.fetchone()["cnt"]
+    await msg.answer(t(user_id, "stats").format(count), parse_mode="HTML")
 
-@dp.callback_query(F.data.startswith("fav_"))
-async def fav_cb(call: types.CallbackQuery):
-    uid = call.from_user.id
-    try:
-        tid = int(call.data.split("_")[1])
-    except:
-        await call.answer()
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM favorites WHERE user_id=? AND favorite_id=?", (uid, tid))
-        if cur.fetchone():
-            cur.execute("DELETE FROM favorites WHERE user_id=? AND favorite_id=?", (uid, tid))
-            await call.answer("Убрано")
-        else:
-            cur.execute(
-                "INSERT OR IGNORE INTO favorites (user_id, favorite_id, date) VALUES (?,?,?)",
-                (uid, tid, datetime.now().isoformat())
-            )
-            await call.answer("Добавлено")
-        conn.commit()
-
-@dp.callback_query(F.data.startswith("block_"))
-async def block_cb(call: types.CallbackQuery):
-    try:
-        tid = int(call.data.split("_")[1])
-    except:
-        await call.answer()
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR IGNORE INTO blacklist (user_id, blocked_id, date) VALUES (?,?,?)",
-            (call.from_user.id, tid, datetime.now().isoformat())
-        )
-        conn.commit()
-    await call.answer("Заблокирован")
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_fav"], TEXTS["en"]["m_fav"]]))
-async def show_fav(msg: types.Message):
-    user_id = msg.from_user.id
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute('''
-            SELECT p.* FROM favorites f
-            JOIN profiles p ON f.favorite_id = p.user_id
-            WHERE f.user_id=? AND p.active=1
-        ''', (user_id,))
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer(t(user_id, "fav_empty"))
-        return
-    for r in rows:
-        await msg.answer(format_profile(r), parse_mode="HTML")
-        await asyncio.sleep(0.08)
-
+# ================== REPORTS ==================
 @dp.callback_query(F.data.startswith("report_"))
 async def report_start(call: types.CallbackQuery):
-    uid = call.from_user.id
-    if get_daily_reports(uid) >= REPORT_LIMIT_PER_DAY:
-        await call.answer(t(uid, "report_limit"), show_alert=True)
-        return
-    try:
-        tid = int(call.data.split("_")[1])
-    except:
-        await call.answer()
-        return
-    report_data[uid] = {"target": tid}
-    await call.message.answer(t(uid, "report_ask"))
+    report_data[call.from_user.id] = {"target": int(call.data.split("_")[1])}
+    await call.message.answer(t(call.from_user.id, "report_ask"))
     await call.answer()
 
-@dp.message(lambda m: m.from_user.id in report_data and user_data.get(m.from_user.id, {}).get("step") is None)
+@dp.message(lambda m: m.from_user.id in report_data and m.from_user.id not in user_data)
 async def report_reason(msg: types.Message):
-    uid = msg.from_user.id
-    if uid not in report_data:
-        return
-    if get_daily_reports(uid) >= REPORT_LIMIT_PER_DAY:
-        await msg.answer(t(uid, "report_limit"))
-        report_data.pop(uid, None)
-        return
-    target = report_data[uid]["target"]
-    reason = (msg.text or "")[:300]
+    user_id = msg.from_user.id
+    target_id = report_data[user_id]["target"]
+    reason = msg.text[:300]
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO reports (reporter_id, reported_id, reason, date) VALUES (?,?,?,?)",
-            (uid, target, reason, datetime.now().isoformat())
-        )
+        cur.execute("INSERT INTO reports (reporter_id, reported_id, reason, date) VALUES (?, ?, ?, ?)",
+                    (user_id, target_id, reason, datetime.now().isoformat()))
         conn.commit()
-    await msg.answer(t(uid, "report_sent"))
-    report_data.pop(uid, None)
-    for admin in ADMIN_IDS:
+    await msg.answer(t(user_id, "report_sent"))
+    report_data.pop(user_id, None)
+    for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(
-                admin,
-                f"⚠️ Жалоба\nОт: <code>{uid}</code>\nНа: <code>{target}</code>\n{html.escape(reason)}",
-                parse_mode="HTML"
-            )
+            await bot.send_message(admin_id, f"⚠️ Report\nFrom: {user_id}\nTo: {target_id}\n{reason}")
         except:
             pass
 
-# ================== CHECK / WEB / STATS ==================
-@dp.message(F.text.in_([TEXTS["ru"]["m_check"], TEXTS["en"]["m_check"]]))
-@dp.message(Command("stats"))
-async def check_player(msg: types.Message):
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer(
-            "Пример:\n<code>/stats 76561199180387602</code>\nили ссылка на профиль",
-            parse_mode="HTML"
-        )
-        return
-    status = await msg.answer("⏳ Ищу...")
-    steamid = await resolve_steamid(args[1])
-    if not steamid:
-        await status.edit_text("❌ Не распознал SteamID")
-        return
-    stats = await get_rust_stats(steamid)
-    hours = f"{stats['hours']} ч" if stats["hours"] is not None else "скрыто"
-    kills = stats["kills"] if stats["kills"] is not None else "—"
-    deaths = stats["deaths"] if stats["deaths"] is not None else "—"
-    kd = stats["kd"] if stats["kd"] is not None else "—"
-    name = html.escape(stats["name"])
-    text = (
-        f"👤 <b>{name}</b>\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"⏱ Часы: <b>{hours}</b>\n"
-        f"⚔️ Убийств: <b>{kills}</b>\n"
-        f"💀 Смертей: <b>{deaths}</b>\n"
-        f"📊 K/D: <b>{kd}</b>\n"
-        f"━━━━━━━━━━━━━━━━\n"
-        f"<a href='https://steamcommunity.com/profiles/{steamid}'>Steam</a> • "
-        f"<a href='https://rustbans.ru/rust-player-stats?steamid={steamid}'>rustbans</a>"
-    )
-    await status.edit_text(text, parse_mode="HTML", disable_web_page_preview=True)
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_web"], TEXTS["en"]["m_web"]]))
-async def web_app(msg: types.Message):
-    await msg.answer(t(msg.from_user.id, "rustylub"), parse_mode="HTML", disable_web_page_preview=False)
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_stats"], TEXTS["en"]["m_stats"]]))
-async def bot_stats_user(msg: types.Message):
-    lang = get_lang(msg.from_user.id)
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT COUNT(*) as c FROM profiles WHERE active=1 AND looking_for IS NOT NULL AND language=?",
-            (lang,)
-        )
-        count = cur.fetchone()["c"]
-    await msg.answer(f"📊 Активных анкет: <b>{count}</b>", parse_mode="HTML")
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_new"], TEXTS["en"]["m_new"]]))
-async def whats_new(msg: types.Message):
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT text, date FROM updates ORDER BY id DESC LIMIT 5")
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Пока нет обновлений")
-        return
-    text = "🆕 <b>Обновления</b>\n\n"
-    for r in rows:
-        text += f"• {str(r['date'])[:10]}\n{html.escape(r['text'])}\n\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_lang"], TEXTS["en"]["m_lang"]]))
-async def change_lang(msg: types.Message):
-    await msg.answer(t(msg.from_user.id, "choose_lang"), reply_markup=lang_keyboard())
-
-@dp.message(F.text.in_([TEXTS["ru"]["m_country"], TEXTS["en"]["m_country"]]))
-async def change_country(msg: types.Message):
-    await msg.answer(t(msg.from_user.id, "choose_country"), reply_markup=country_keyboard())
-    user_data[msg.from_user.id] = {"step": "choose_country"}
-
-# ================== ADMIN ==================
+# ================== ADMIN PANEL ==================
 @dp.message(Command("admin"))
-async def admin_cmd(msg: types.Message):
+async def admin_panel(msg: types.Message):
     if not is_admin(msg.from_user.id):
         return
-    s = get_bot_stats()
-    text = (
-        "🛠 <b>Админ-панель</b>\n"
-        "━━━━━━━━━━━━━━━━\n"
-        f"👥 Юзеров: <b>{s['users']}</b>\n"
-        f"📋 Анкет: <b>{s['profiles']}</b>\n"
-        f"🇷🇺 {s['ru']} | 🇬🇧 {s['en']}\n"
-        f"💞 Мэтчей: <b>{s['matches']}</b>\n"
-        f"💕 Свайпов: <b>{s['swipes']}</b>\n"
-        f"🚫 Банов: <b>{s['bans']}</b>\n"
-        f"⚠️ Жалоб: <b>{s['reports_open']}</b>\n"
-        f"📢 Реклам: <b>{s['ads']}</b>\n"
-        f"🆕 За 24ч: <b>{s['new_24h']}</b>\n"
-        f"🟢 Активны 24ч: <b>{s['active_24h']}</b>\n"
-        "━━━━━━━━━━━━━━━━\n"
-        "/user ID\n/profile ID\n/ban ID причина\n/unban ID\n/bans\n"
-        "/deactivate ID\n/activate ID\n/clear_swipes ID\n"
-        "/reports\n/update текст\n/add_ad текст\n/list_ads\n/del_ad ID\n"
-        "/last 20\n/logs\n/say ID текст\n/stats_full"
-    )
-    await msg.answer(text, parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats")],
+        [InlineKeyboardButton(text="🔗 Топ рефералов", callback_data="adm_refs")],
+        [InlineKeyboardButton(text="📋 Все рефоводы", callback_data="adm_all_refs")],
+        [InlineKeyboardButton(text="⚠️ Жалобы", callback_data="adm_reports")],
+        [InlineKeyboardButton(text="🚫 Баны", callback_data="adm_bans")],
+    ])
+    await msg.answer("🛠 <b>Админ-панель</b>", reply_markup=kb, parse_mode="HTML")
 
-@dp.message(Command("stats_full"))
-async def stats_full(msg: types.Message):
-    if not is_admin(msg.from_user.id):
+@dp.callback_query(F.data.startswith("adm_"))
+async def admin_callbacks(call: types.CallbackQuery):
+    if not is_admin(call.from_user.id):
+        await call.answer("Нет доступа", show_alert=True)
         return
-    s = get_bot_stats()
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT country, COUNT(*) as c FROM profiles WHERE country IS NOT NULL GROUP BY country ORDER BY c DESC LIMIT 10"
-        )
-        countries = cur.fetchall()
-        cur.execute(
-            "SELECT looking_for, COUNT(*) as c FROM profiles WHERE looking_for IS NOT NULL GROUP BY looking_for ORDER BY c DESC"
-        )
-        looking = cur.fetchall()
-    text = f"📊 <b>Полная статистика</b>\n\nЮзеры: {s['users']}\nАнкеты: {s['profiles']}\nМэтчи: {s['matches']}\n\n<b>Страны:</b>\n"
-    for c in countries:
-        text += f"• {html.escape(str(c['country']))}: {c['c']}\n"
-    text += "\n<b>Цели:</b>\n"
-    for l in looking:
-        text += f"• {html.escape(str(l['looking_for']))}: {l['c']}\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(Command("user"))
-async def admin_user(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        uid = int(msg.text.split()[1])
-    except:
-        await msg.answer("/user user_id")
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM profiles WHERE user_id=?", (uid,))
-        p = cur.fetchone()
-        cur.execute("SELECT reason, date FROM bans WHERE user_id=?", (uid,))
-        ban = cur.fetchone()
-        cur.execute("SELECT COUNT(*) as c FROM swipes WHERE user_id=?", (uid,))
-        sw = cur.fetchone()["c"]
-        cur.execute("SELECT COUNT(*) as c FROM matches WHERE user1_id=? OR user2_id=?", (uid, uid))
-        mt = cur.fetchone()["c"]
-    if not p:
-        await msg.answer("Не найден")
-        return
-    text = (
-        f"👤 <b>{uid}</b>\n"
-        f"@{html.escape(p['username'] or '—')}\n"
-        f"Lang: {p['language']} | Country: {html.escape(p['country'] or '—')}\n"
-        f"Active: {p['active']}\n"
-        f"Looking: {html.escape(p['looking_for'] or '—')}\n"
-        f"Created: {str(p['date'])[:19]}\n"
-        f"Last: {str(p['last_active'])[:19]}\n"
-        f"Swipes: {sw} | Matches: {mt}\n"
-    )
-    if ban:
-        text += f"🚫 {html.escape(ban['reason'])} ({str(ban['date'])[:19]})"
-    await msg.answer(text, parse_mode="HTML")
-    admin_log(msg.from_user.id, "user_info", str(uid))
-
-@dp.message(Command("profile"))
-async def admin_profile(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        uid = int(msg.text.split()[1])
-    except:
-        await msg.answer("/profile user_id")
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM profiles WHERE user_id=?", (uid,))
-        r = cur.fetchone()
-    if not r or not r["looking_for"]:
-        await msg.answer("Анкеты нет")
-        return
-    await msg.answer(format_profile(r), parse_mode="HTML")
-
-@dp.message(Command("deactivate"))
-async def admin_deactivate(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        uid = int(msg.text.split()[1])
+    data = call.data
+    if data == "adm_stats":
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("UPDATE profiles SET active=0 WHERE user_id=?", (uid,))
-            conn.commit()
-        admin_log(msg.from_user.id, "deactivate", str(uid))
-        await msg.answer(f"Деактивирован {uid}")
-    except:
-        await msg.answer("/deactivate user_id")
-
-@dp.message(Command("activate"))
-async def admin_activate(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        uid = int(msg.text.split()[1])
+            cur.execute("SELECT COUNT(*) as c FROM profiles WHERE active = 1 AND looking_for IS NOT NULL")
+            active = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) as c FROM profiles")
+            total = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) as c FROM referrals WHERE verified = 1")
+            refs = cur.fetchone()["c"]
+            cur.execute("SELECT COALESCE(SUM(points), 0) as s FROM profiles")
+            points = cur.fetchone()["s"]
+        text = f"📊 <b>Статистика</b>\n\nПользователей: <b>{total}</b>\nАктивных анкет: <b>{active}</b>\nПодтверждённых рефералов: <b>{refs}</b>\nВсего баллов: <b>{points}</b>"
+        await call.message.edit_text(text, parse_mode="HTML")
+    elif data == "adm_refs":
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("UPDATE profiles SET active=1 WHERE user_id=?", (uid,))
-            conn.commit()
-        admin_log(msg.from_user.id, "activate", str(uid))
-        await msg.answer(f"Активирован {uid}")
-    except:
-        await msg.answer("/activate user_id")
-
-@dp.message(Command("clear_swipes"))
-async def admin_clear_swipes(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        uid = int(msg.text.split()[1])
+            cur.execute('''
+                SELECT p.user_id, p.username, COALESCE(p.points, 0) as points,
+                       (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = p.user_id AND r.verified = 1) as invited
+                FROM profiles p
+                WHERE EXISTS (SELECT 1 FROM referrals r WHERE r.referrer_id = p.user_id)
+                ORDER BY invited DESC, points DESC LIMIT 20
+            ''')
+            rows = cur.fetchall()
+        if not rows:
+            await call.message.edit_text("Пока никто не пригласил")
+            return
+        text = "🔗 <b>Топ рефералов</b>\n\n"
+        for r in rows:
+            text += f"@{r['username'] or r['user_id']} — {r['invited']} чел. | {r['points']} б.\n"
+        await call.message.edit_text(text, parse_mode="HTML")
+    elif data == "adm_all_refs":
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("DELETE FROM swipes WHERE user_id=?", (uid,))
-            conn.commit()
-        admin_log(msg.from_user.id, "clear_swipes", str(uid))
-        await msg.answer(f"Свайпы {uid} очищены")
-    except:
-        await msg.answer("/clear_swipes user_id")
+            cur.execute('''
+                SELECT p.user_id, p.username, p.referral_code,
+                       (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = p.user_id AND r.verified = 1) as invited
+                FROM profiles p WHERE p.referral_code IS NOT NULL
+                ORDER BY invited DESC LIMIT 30
+            ''')
+            rows = cur.fetchall()
+        text = "📋 <b>Все рефоводы</b>\n\n"
+        for r in rows:
+            text += f"@{r['username'] or r['user_id']} | <code>{r['referral_code']}</code> | {r['invited']}\n"
+        await call.message.edit_text(text[:4000], parse_mode="HTML")
+    elif data == "adm_reports":
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT * FROM reports WHERE resolved = 0 ORDER BY id DESC LIMIT 10")
+            rows = cur.fetchall()
+        if not rows:
+            await call.message.edit_text("Жалоб нет")
+            return
+        text = "⚠️ <b>Жалобы</b>\n\n"
+        for r in rows:
+            text += f"От {r['reporter_id']} → {r['reported_id']}\n{r['reason']}\n➖\n"
+        await call.message.edit_text(text[:4000], parse_mode="HTML")
+    elif data == "adm_bans":
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT user_id, reason, date FROM bans ORDER BY id DESC LIMIT 15")
+            rows = cur.fetchall()
+        if not rows:
+            await call.message.edit_text("Банов нет")
+            return
+        text = "🚫 <b>Баны</b>\n\n"
+        for r in rows:
+            text += f"ID: {r['user_id']}\n{r['reason']}\n{r['date'][:10]}\n➖\n"
+        await call.message.edit_text(text[:4000], parse_mode="HTML")
+    await call.answer()
 
-@dp.message(Command("bans"))
-async def admin_bans(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, reason, date FROM bans ORDER BY id DESC LIMIT 20")
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Банов нет")
-        return
-    text = "🚫 <b>Баны</b>\n\n"
-    for r in rows:
-        text += f"• <code>{r['user_id']}</code> — {html.escape(r['reason'] or '')}\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(Command("last"))
-async def admin_last(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    limit = 15
-    try:
-        limit = min(int(msg.text.split()[1]), 50)
-    except:
-        pass
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT user_id, username, date, language FROM profiles ORDER BY id DESC LIMIT ?",
-            (limit,)
-        )
-        rows = cur.fetchall()
-    text = f"🆕 Последние {len(rows)}:\n\n"
-    for r in rows:
-        text += f"• <code>{r['user_id']}</code> @{html.escape(r['username'] or '—')} [{r['language']}]\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(Command("logs"))
-async def admin_logs_cmd(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM admin_logs ORDER BY id DESC LIMIT 20")
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Логов нет")
-        return
-    text = "📜 <b>Логи</b>\n\n"
-    for r in rows:
-        text += f"• {str(r['date'])[:16]} | {r['admin_id']} | {r['action']} | {html.escape(r['details'] or '')}\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(Command("say"))
-async def admin_say(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    args = msg.text.split(maxsplit=2)
-    if len(args) < 3:
-        await msg.answer("/say user_id текст")
-        return
-    try:
-        uid = int(args[1])
-        text = args[2][:2000]
-        await bot.send_message(uid, f"📩 Сообщение от администрации:\n\n{text}")
-        admin_log(msg.from_user.id, "say", f"{uid}: {text[:80]}")
-        await msg.answer("✅ Отправлено")
-    except Exception as e:
-        await msg.answer(f"Ошибка: {e}")
-
+# ================== ADMIN COMMANDS ==================
 @dp.message(Command("ban"))
-async def ban_cmd(msg: types.Message):
+async def cmd_ban(msg: types.Message):
     if not is_admin(msg.from_user.id):
         return
     args = msg.text.split(maxsplit=2)
     if len(args) < 3:
-        await msg.answer("/ban user_id причина")
+        await msg.answer("Использование: /ban user_id причина")
         return
     try:
         target = int(args[1])
-    except:
-        await msg.answer("Неверный ID")
-        return
-    reason = args[2][:200]
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO bans (user_id, reason, banned_by, date) VALUES (?,?,?,?)",
-            (target, reason, msg.from_user.id, datetime.now().isoformat())
-        )
-        cur.execute("UPDATE profiles SET active=0 WHERE user_id=?", (target,))
-        conn.commit()
-    admin_log(msg.from_user.id, "ban", f"{target}: {reason}")
-    await msg.answer(f"🚫 Забанен {target}")
-    try:
-        await bot.send_message(target, f"🚫 Вы забанены.\nПричина: {reason}")
-    except:
-        pass
+        reason = args[2]
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("INSERT OR REPLACE INTO bans (user_id, reason, banned_by, date) VALUES (?, ?, ?, ?)",
+                        (target, reason, msg.from_user.id, datetime.now().isoformat()))
+            cur.execute("UPDATE profiles SET active = 0 WHERE user_id = ?", (target,))
+            conn.commit()
+        await msg.answer(f"Забанен {target}")
+        try:
+            await bot.send_message(target, t(target, "banned").format(reason))
+        except:
+            pass
+    except Exception as e:
+        await msg.answer(str(e))
 
 @dp.message(Command("unban"))
-async def unban_cmd(msg: types.Message):
+async def cmd_unban(msg: types.Message):
     if not is_admin(msg.from_user.id):
         return
     try:
         target = int(msg.text.split()[1])
         with get_db() as conn:
             cur = conn.cursor()
-            cur.execute("DELETE FROM bans WHERE user_id=?", (target,))
+            cur.execute("DELETE FROM bans WHERE user_id = ?", (target,))
             conn.commit()
-        admin_log(msg.from_user.id, "unban", str(target))
-        await msg.answer(f"✅ Разбанен {target}")
+        await msg.answer(f"Разбанен {target}")
     except:
-        await msg.answer("/unban user_id")
-
-@dp.message(Command("update"))
-async def update_cmd(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer("/update Текст")
-        return
-    text = args[1].strip()
-    if len(text) > 1500:
-        await msg.answer("Макс. 1500 символов")
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO updates (text, date, sent_by) VALUES (?,?,?)",
-            (text, datetime.now().isoformat(), msg.from_user.id)
-        )
-        cur.execute("SELECT user_id, language FROM profiles")
-        users = cur.fetchall()
-        conn.commit()
-    await msg.answer(f"Начинаю рассылку ({len(users)} чел.)...")
-    ok = fail = 0
-    for u in users:
-        if u["user_id"] in ADMIN_IDS:
-            continue
-        try:
-            lang = u["language"] if u["language"] in ("ru", "en") else "ru"
-            txt = f"🆕 <b>Обновление</b>\n\n{text}" if lang == "ru" else f"🆕 <b>Update</b>\n\n{text}"
-            await bot.send_message(u["user_id"], txt, parse_mode="HTML")
-            ok += 1
-            await asyncio.sleep(0.05)
-        except TelegramRetryAfter as e:
-            await asyncio.sleep(e.retry_after + 1)
-            try:
-                await bot.send_message(u["user_id"], txt, parse_mode="HTML")
-                ok += 1
-            except:
-                fail += 1
-        except:
-            fail += 1
-    admin_log(msg.from_user.id, "update", f"ok={ok} fail={fail}")
-    await msg.answer(f"✅ {ok} | ❌ {fail}")
-
-@dp.message(Command("add_ad"))
-async def add_ad(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer("/add_ad Текст рекламы")
-        return
-    text = args[1].strip()
-    if len(text) > 500:
-        await msg.answer("Макс. 500 символов")
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO ads (text, date, created_by) VALUES (?,?,?)",
-            (text, datetime.now().isoformat(), msg.from_user.id)
-        )
-        conn.commit()
-    admin_log(msg.from_user.id, "add_ad", text[:80])
-    await msg.answer("✅ Реклама добавлена")
-
-@dp.message(Command("list_ads"))
-async def list_ads(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT id, text, active FROM ads ORDER BY id DESC LIMIT 20")
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Реклам нет")
-        return
-    text = "📢 Рекламы:\n\n"
-    for r in rows:
-        st = "✅" if r["active"] else "❌"
-        text += f"{st} #{r['id']}: {html.escape(r['text'][:70])}\n"
-    await msg.answer(text, parse_mode="HTML")
-
-@dp.message(Command("del_ad"))
-async def del_ad(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    try:
-        ad_id = int(msg.text.split()[1])
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("UPDATE ads SET active=0 WHERE id=?", (ad_id,))
-            conn.commit()
-        admin_log(msg.from_user.id, "del_ad", str(ad_id))
-        await msg.answer(f"✅ Реклама #{ad_id} отключена")
-    except:
-        await msg.answer("/del_ad id")
-
-@dp.message(Command("reports"))
-async def reports_cmd(msg: types.Message):
-    if not is_admin(msg.from_user.id):
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM reports WHERE resolved=0 ORDER BY id DESC LIMIT 10")
-        rows = cur.fetchall()
-    if not rows:
-        await msg.answer("Жалоб нет")
-        return
-    for r in rows:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🚫 Бан", callback_data=f"aban_{r['reported_id']}_{r['id']}"),
-            InlineKeyboardButton(text="✅ Ок", callback_data=f"arej_{r['id']}")
-        ]])
-        await msg.answer(
-            f"⚠️ #{r['id']}\nОт: <code>{r['reporter_id']}</code>\nНа: <code>{r['reported_id']}</code>\n{html.escape(r['reason'] or '')}",
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
-
-@dp.callback_query(F.data.startswith("aban_"))
-async def aban(call: types.CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return
-    parts = call.data.split("_")
-    try:
-        target, rid = int(parts[1]), int(parts[2])
-    except:
-        await call.answer()
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR REPLACE INTO bans (user_id, reason, banned_by, date) VALUES (?,?,?,?)",
-            (target, "Жалоба", call.from_user.id, datetime.now().isoformat())
-        )
-        cur.execute("UPDATE profiles SET active=0 WHERE user_id=?", (target,))
-        cur.execute("UPDATE reports SET resolved=1 WHERE id=?", (rid,))
-        conn.commit()
-    admin_log(call.from_user.id, "ban_from_report", str(target))
-    await call.message.edit_text(f"Забанен {target}")
-    await call.answer()
-
-@dp.callback_query(F.data.startswith("arej_"))
-async def arej(call: types.CallbackQuery):
-    if not is_admin(call.from_user.id):
-        return
-    try:
-        rid = int(call.data.split("_")[1])
-    except:
-        await call.answer()
-        return
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE reports SET resolved=1 WHERE id=?", (rid,))
-        conn.commit()
-    await call.message.edit_text("Отклонено")
-    await call.answer()
+        await msg.answer("Ошибка")
 
 # ================== MAIN ==================
 async def main():
     cleanup_old_data()
-    print("🤖 Rust LFG Bot v14.0 запущен")
-    print(f"📁 DB: {DB_PATH}")
+    print("🤖 Rust LFG Bot v11.0 запущен")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
